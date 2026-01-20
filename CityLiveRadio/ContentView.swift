@@ -334,6 +334,7 @@ extension RadioPlayer: AVPlayerItemMetadataOutputPushDelegate {
 
 struct ContentView: View {
     @StateObject private var radio = RadioPlayer()
+    @State private var showListenAgain: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -343,14 +344,12 @@ struct ContentView: View {
                     .ignoresSafeArea()
 
                 VStack(spacing: 20) {
-                    // Use the cityLogo image from Assets.xcassets
+                    // Use the cityLogo image from Assets.xcassets (2x asset will be used automatically by iOS when appropriate)
                     Image("cityLogo")
                         .resizable()
                         .scaledToFit()
                         .frame(width: 140, height: 140)
                         .shadow(radius: 6)
-
-
 
                     Button(action: { radio.toggle() }) {
                         HStack {
@@ -363,74 +362,91 @@ struct ContentView: View {
                         .frame(minWidth: 140)
                         .padding(.vertical, 12)
                     }
-                    // Make the button prominent and use a white tint so it shows on black background
                     .buttonStyle(.borderedProminent)
                     .tint(.white)
                     .accessibilityLabel(radio.isPlaying ? "Stop radio" : "Play radio")
 
                     // Track metadata (if any) displayed below the action button
-                    if radio.isPlaying {
-                        if let track = radio.trackInfo {
-                            // Show the header on its own line (larger) and the track on the next line (smaller)
-                            VStack(spacing: 4) {
-                                Text("Now Playing -")
-                                    .font(.title2)
-                                    .bold()
-                                Text(track)
-                                    .font(.title3)
-                                    .lineLimit(2)
-                                    .multilineTextAlignment(.center)
+                    Group {
+                        if radio.isPlaying {
+                            if let track = radio.trackInfo {
+                                VStack(spacing: 4) {
+                                    Text("Now Playing -")
+                                        .font(.title2)
+                                        .bold()
+                                    Text(track)
+                                        .font(.title3)
+                                        .lineLimit(2)
+                                        .multilineTextAlignment(.center)
 
-                                // artwork (if available)
-                                if let art = radio.artwork {
-                                    Image(uiImage: art)
-                                        .resizable()
-                                        .scaledToFit()
-                                        .frame(maxWidth: 220, maxHeight: 220)
-                                        .cornerRadius(8)
-                                        .shadow(radius: 6)
-                                        .padding(.top, 8)
+                                    if let art = radio.artwork {
+                                        Image(uiImage: art)
+                                            .resizable()
+                                            .scaledToFit()
+                                            .frame(maxWidth: 220, maxHeight: 220)
+                                            .cornerRadius(8)
+                                            .shadow(radius: 6)
+                                            .padding(.top, 8)
+                                    }
                                 }
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity)
+                                .multilineTextAlignment(.center)
+                                .padding(.top, 8)
+                            } else {
+                                // placeholder spacer to keep layout stable
+                                Text(" ")
+                                    .font(.subheadline)
+                                    .padding(.top, 8)
                             }
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .multilineTextAlignment(.center)
-                            .padding(.top, 8)
                         } else {
-                            // Show placeholder while playing but metadata hasn't arrived yet
+                            // keep same space when not playing
                             Text(" ")
                                 .font(.subheadline)
-                                .foregroundColor(.white.opacity(0.0))
                                 .padding(.top, 8)
                         }
-                    } else {
-                        // Keep the empty space so layout doesn't jump when metadata appears
-                        Text(" ")
-                            .font(.subheadline)
-                            .padding(.top, 8)
                     }
-
-                    // Listen Again image placed under the track metadata – tappable to navigate
-                    NavigationLink(destination: ListenAgainView().environmentObject(radio)) {
-                        Image("listenAgain")
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 250, height: 120)
-                            .shadow(radius: 6)
-                            .padding(.top, 12)
-                            .accessibilityLabel("Listen again")
-                    }
-                    .buttonStyle(.plain)
 
                     Spacer()
                 }
                 .padding()
             }
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Menu {
+                        Button(action: { showListenAgain = true }) {
+                            Label("Listen Again", systemImage: "clock.arrow.circlepath")
+                        }
+                        Button(action: { openContactMail() }) {
+                            Label("Contact Us", systemImage: "envelope")
+                        }
+                    } label: {
+                        Image(systemName: "line.horizontal.3")
+                            .font(.title2)
+                            .foregroundColor(.white)
+                            .accessibilityLabel("Menu")
+                            .padding(.leading, 4)
+                    }
+                }
+            }
+            .navigationDestination(isPresented: $showListenAgain) {
+                ListenAgainView().environmentObject(radio)
+            }
         }
+    }
+
+    private func openContactMail() {
+        #if canImport(UIKit)
+        let to = "contactus@cityliveradio.co.uk"
+        if let url = URL(string: "mailto:\(to)") {
+            DispatchQueue.main.async {
+                UIApplication.shared.open(url, options: [:], completionHandler: nil)
+            }
+        }
+        #endif
     }
 }
 
-// Simple ListenAgain screen with a back button
 struct ListenAgainView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var radio: RadioPlayer
@@ -451,67 +467,113 @@ struct ListenAgainView: View {
     ]
 
     var body: some View {
-        VStack(spacing: 12) {
-            Text("Listen Again")
-                .font(.title)
-                .bold()
-                .foregroundColor(.white)
-                .padding(.top, 16)
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Listen Again")
+                    .font(.largeTitle)
+                    .bold()
+                    .foregroundColor(.white)
 
-            List {
-                ForEach(shows) { show in
-                    HStack {
-                        VStack(alignment: .leading) {
-                            Text(show.title)
+                if let current = radio.currentStreamURL, radio.isPlaying, let playing = shows.first(where: { $0.url == current }) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "play.circle.fill")
+                            .foregroundColor(.green)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Now playing")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                            Text(playing.title)
+                                .font(.headline)
                                 .foregroundColor(.white)
-                            if radio.currentStreamURL == show.url && radio.isPlaying {
-                                Text("Playing")
-                                    .font(.caption)
-                                    .foregroundColor(.green)
-                            }
+                                .lineLimit(1)
                         }
                         Spacer()
-                        Button(action: {
-                            // If this show is already playing, stop it; otherwise play it (stopping current first)
-                            if radio.currentStreamURL == show.url && radio.isPlaying {
-                                radio.stop()
-                            } else {
-                                // Ensure any live playback is stopped and play the selected show
-                                radio.playStream(url: show.url)
-                            }
-                        }) {
-                            Image(systemName: (radio.currentStreamURL == show.url && radio.isPlaying) ? "stop.fill" : "play.fill")
-                                .foregroundColor(.white)
-                                .imageScale(.large)
-                                .padding(8)
-                                .background(Color.gray.opacity(0.2))
-                                .clipShape(Circle())
-                        }
-                        .buttonStyle(.plain)
                     }
-                    .listRowBackground(Color.black)
                 }
             }
-            .listStyle(.plain)
-            .background(Color.black)
+            .padding([.top, .horizontal], 16)
 
-            Spacer()
+            ScrollView {
+                LazyVStack(spacing: 12) {
+                    ForEach(shows) { show in
+                        let isPlaying = (radio.currentStreamURL == show.url && radio.isPlaying)
+                        HStack(spacing: 12) {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(Color.gray.opacity(0.15))
+                                    .frame(width: 64, height: 64)
+                                Image(systemName: "music.note.list")
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 30, height: 30)
+                                    .foregroundColor(.white.opacity(0.9))
+                            }
 
-            Button(action: {
-                // Restore live stream when leaving so Play resumes live stream
-                radio.restoreLive()
-                dismiss()
-            }) {
-                Text("Back")
-                    .bold()
-                    .frame(minWidth: 140)
-                    .padding(.vertical, 12)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(show.title)
+                                    .foregroundColor(.white)
+                                    .font(.headline)
+                                    .lineLimit(2)
+                                Text(show.url.host ?? "")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                            }
+
+                            Spacer()
+
+                            Button(action: {
+                                withAnimation {
+                                    if isPlaying {
+                                        radio.stop()
+                                    } else {
+                                        radio.playStream(url: show.url)
+                                    }
+                                }
+                            }) {
+                                HStack(spacing: 8) {
+                                    Image(systemName: isPlaying ? "stop.fill" : "play.fill")
+                                    Text(isPlaying ? "Stop" : "Play")
+                                }
+                                .font(.subheadline)
+                                .padding(.vertical, 8)
+                                .padding(.horizontal, 12)
+                                .background(isPlaying ? Color.red : Color.accentColor)
+                                .foregroundColor(.white)
+                                .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(12)
+                        .background(Color.white.opacity(0.03))
+                        .cornerRadius(12)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(Color.white.opacity(0.03), lineWidth: 1)
+                        )
+                        .padding(.horizontal, 16)
+                    } // ForEach(shows)
+                } // LazyVStack
+                .padding(.vertical, 12)
+            } // ScrollView
+
+            // Bottom Back button
+            VStack {
+                Button(action: {
+                    radio.restoreLive()
+                    dismiss()
+                }) {
+                    Text("Back")
+                        .bold()
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                }
+                .background(Color.white)
+                .foregroundColor(.black)
+                .cornerRadius(12)
+                .padding(16)
             }
-            .buttonStyle(.borderedProminent)
-            .foregroundColor(.black)
-            .tint(.white)
-            .padding(.bottom, 24)
-        }
+            .background(Color.black)
+        } // VStack root
         .background(Color.black.ignoresSafeArea())
         .navigationTitle("Listen Again")
         .navigationBarTitleDisplayMode(.inline)
@@ -523,9 +585,10 @@ struct ListenAgainView: View {
             // Ensure listen-again playback is stopped and live is restored when leaving
             radio.restoreLive()
         }
-    }
-}
+    } // body
+} // struct ListenAgainView
 
+// Preview for SwiftUI canvas
 #Preview {
     ContentView()
 }
