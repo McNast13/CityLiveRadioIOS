@@ -8,6 +8,9 @@
 import SwiftUI
 import AVFoundation
 import Combine
+#if canImport(UIKit)
+import UIKit
+#endif
 
 // Protocol used by tests to inject a mock player implementation.
 public protocol PlayerProtocol {
@@ -20,12 +23,22 @@ final class RadioPlayer: NSObject, ObservableObject {
     @Published var isPlaying: Bool = false
     @Published var trackInfo: String? = nil
     @Published var currentStreamURL: URL? = nil
+    @Published var artwork: UIImage? = nil
 
     private var player: AVPlayer?
     private var metadataOutput: AVPlayerItemMetadataOutput?
 
+    // Optional injected player (used by unit tests)
+    private var testPlayer: PlayerProtocol? = nil
+
     // canonical live stream URL
     private let liveStreamURL = URL(string: "https://streaming.live365.com/a91939")!
+
+    // Convenience initializer for tests to inject a mock player
+    convenience init(player: PlayerProtocol) {
+        self.init()
+        self.testPlayer = player
+    }
 
     override init() {
         super.init()
@@ -48,6 +61,9 @@ final class RadioPlayer: NSObject, ObservableObject {
             currentItem.remove(output)
         }
 
+        // clear artwork until new metadata arrives
+        DispatchQueue.main.async { self.artwork = nil }
+
         let item = AVPlayerItem(url: url)
         metadataOutput = AVPlayerItemMetadataOutput(identifiers: nil)
         metadataOutput?.setDelegate(self, queue: DispatchQueue.main)
@@ -64,6 +80,12 @@ final class RadioPlayer: NSObject, ObservableObject {
 
     // Play the currently configured player, or recreate the live player if none
     func play() {
+        // If a test player was injected, delegate to it for unit tests
+        if let test = testPlayer {
+            test.play()
+            DispatchQueue.main.async { self.isPlaying = true }
+            return
+        }
         if player == nil {
             // recreate the live player and start
             preparePlayer(with: liveStreamURL, autoPlay: true)
@@ -74,18 +96,34 @@ final class RadioPlayer: NSObject, ObservableObject {
     }
 
     func pause() {
+        if let test = testPlayer {
+            test.pause()
+            DispatchQueue.main.async { self.isPlaying = false }
+            return
+        }
         player?.pause()
         DispatchQueue.main.async { self.isPlaying = false }
     }
 
     // Stop playback and clear current player (used when switching streams)
     func stop() {
+        if testPlayer != nil {
+            // For injected test player just update state
+            DispatchQueue.main.async {
+                self.isPlaying = false
+                self.currentStreamURL = nil
+                self.trackInfo = nil
+                self.artwork = nil
+            }
+            return
+        }
         player?.pause()
         player = nil
         DispatchQueue.main.async {
             self.isPlaying = false
             self.currentStreamURL = nil
             self.trackInfo = nil
+            self.artwork = nil
         }
     }
 
@@ -118,7 +156,7 @@ final class RadioPlayer: NSObject, ObservableObject {
     // Metadata parsing
     func updateMetadata(from metadata: [AVMetadataItem]?) {
         guard let metadata = metadata, !metadata.isEmpty else {
-            DispatchQueue.main.async { self.trackInfo = nil }
+            DispatchQueue.main.async { self.trackInfo = nil; self.artwork = nil }
             return
         }
 
@@ -138,6 +176,149 @@ final class RadioPlayer: NSObject, ObservableObject {
         }
         let combined: String? = (artist != nil && title != nil) ? "\(artist!) — \(title!)" : (title ?? artist)
         DispatchQueue.main.async { self.trackInfo = combined }
+
+        // Primary artwork source: iTunes Search API — use title (and artist if available)
+        if let t = title {
+            print("updateMetadata: attempting iTunes artwork fetch for title='\(t)' artist='\(artist ?? "nil")'")
+            fetchArtworkFromiTunes(artist: artist, title: t)
+        }
+    }
+
+    // MARK: - iTunes Search API lookup (primary)
+    // Uses iTunes Search API (no API key) to find artwork for a track. If artist provided, term = "artist title" else title only.
+    private func fetchArtworkFromiTunes(artist: String?, title: String) {
+        print("fetchArtworkFromiTunes: start for title='\(title)' artist='\(artist ?? "nil")'")
+        DispatchQueue.global(qos: .utility).async {
+            var components = URLComponents()
+            components.scheme = "https"
+            components.host = "itunes.apple.com"
+            components.path = "/search"
+
+            let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            var term = trimmedTitle
+            if let a = artist?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty {
+                term = "\(a) \(trimmedTitle)"
+            }
+            components.queryItems = [
+                URLQueryItem(name: "term", value: term),
+                URLQueryItem(name: "entity", value: "song"),
+                URLQueryItem(name: "limit", value: "1")
+            ]
+
+            guard let url = components.url else {
+                print("fetchArtworkFromiTunes: failed to build URL with term='\(term)'")
+                return
+            }
+            print("fetchArtworkFromiTunes: URL -> \(url.absoluteString)")
+
+            let sem = DispatchSemaphore(value: 0)
+            var artworkURLString: String? = nil
+            var itError: Error? = nil
+            var httpStatus: Int? = nil
+            var rawJSONPreview: String? = nil
+
+            let task = URLSession.shared.dataTask(with: url) { data, resp, err in
+                defer { sem.signal() }
+                if let err = err {
+                    itError = err
+                    print("fetchArtworkFromiTunes: request error: \(err.localizedDescription)")
+                    return
+                }
+                guard let http = resp as? HTTPURLResponse else {
+                    print("fetchArtworkFromiTunes: non-HTTP response")
+                    return
+                }
+                httpStatus = http.statusCode
+                print("fetchArtworkFromiTunes: response status: \(http.statusCode), data len: \(data?.count ?? 0)")
+                guard let data = data else { return }
+                if data.count > 0 {
+                    let preview = String(data: data.prefix(4096), encoding: .utf8) ?? "<non-utf8>"
+                    rawJSONPreview = preview
+                }
+                do {
+                    if let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let results = root["results"] as? [[String: Any]],
+                       let first = results.first {
+                        if let art = first["artworkUrl100"] as? String {
+                            artworkURLString = art
+                            print("fetchArtworkFromiTunes: found artworkUrl100 = \(art)")
+                        } else {
+                            print("fetchArtworkFromiTunes: no artworkUrl100 in first result; keys=\(first.keys)")
+                        }
+                    } else {
+                        print("fetchArtworkFromiTunes: unexpected JSON structure or no results")
+                    }
+                } catch {
+                    print("fetchArtworkFromiTunes: JSON parse error: \(error)")
+                }
+            }
+            task.resume()
+            _ = sem.wait(timeout: .now() + 6)
+
+            if let err = itError {
+                print("fetchArtworkFromiTunes: network error: \(err.localizedDescription)")
+                return
+            }
+
+            if let status = httpStatus { print("fetchArtworkFromiTunes: HTTP status -> \(status)") }
+            if let preview = rawJSONPreview { print("fetchArtworkFromiTunes: JSON preview -> \(preview)") }
+
+            guard var artStr = artworkURLString else {
+                let termValue = components.queryItems?.first(where: { $0.name == "term" })?.value ?? term
+                print("fetchArtworkFromiTunes: no artwork URL found for term='\(termValue)'")
+                return
+            }
+
+            if artStr.contains("100x100") {
+                let high = artStr.replacingOccurrences(of: "100x100", with: "600x600")
+                print("fetchArtworkFromiTunes: upgrading artwork URL from 100x100 to 600x600 -> \(high)")
+                artStr = high
+            } else if artStr.contains("/100x") {
+                let high = artStr.replacingOccurrences(of: "/100x", with: "/600x")
+                artStr = high
+                print("fetchArtworkFromiTunes: adjusted artwork URL -> \(artStr)")
+            }
+
+            guard let artURL = URL(string: artStr) else {
+                print("fetchArtworkFromiTunes: invalid artwork URL string: \(artStr)")
+                return
+            }
+
+            print("fetchArtworkFromiTunes: downloading artwork from \(artURL.absoluteString)")
+            let imgSem = DispatchSemaphore(value: 0)
+            var gotData: Data? = nil
+            var imgError: Error? = nil
+            var imgRespStatus: Int? = nil
+
+            let imgTask = URLSession.shared.dataTask(with: artURL) { data, resp, err in
+                defer { imgSem.signal() }
+                if let err = err {
+                    imgError = err
+                    print("fetchArtworkFromiTunes: image download err: \(err.localizedDescription)")
+                    return
+                }
+                if let http = resp as? HTTPURLResponse {
+                    imgRespStatus = http.statusCode
+                    print("fetchArtworkFromiTunes: image response status: \(http.statusCode), data len: \(data?.count ?? 0)")
+                }
+                gotData = data
+            }
+            imgTask.resume()
+            _ = imgSem.wait(timeout: .now() + 6)
+
+            if let err = imgError {
+                print("fetchArtworkFromiTunes: image network error: \(err.localizedDescription)")
+                return
+            }
+            if let s = imgRespStatus { print("fetchArtworkFromiTunes: final image HTTP status = \(s)") }
+
+            if let d = gotData, let ui = UIImage(data: d) {
+                print("fetchArtworkFromiTunes: successfully downloaded artwork, size=\(d.count) bytes")
+                DispatchQueue.main.async { self.artwork = ui }
+            } else {
+                print("fetchArtworkFromiTunes: failed to download or decode artwork")
+            }
+        }
     }
 }
 
@@ -199,6 +380,17 @@ struct ContentView: View {
                                     .font(.title3)
                                     .lineLimit(2)
                                     .multilineTextAlignment(.center)
+
+                                // artwork (if available)
+                                if let art = radio.artwork {
+                                    Image(uiImage: art)
+                                        .resizable()
+                                        .scaledToFit()
+                                        .frame(maxWidth: 220, maxHeight: 220)
+                                        .cornerRadius(8)
+                                        .shadow(radius: 6)
+                                        .padding(.top, 8)
+                                }
                             }
                             .foregroundColor(.white)
                             .frame(maxWidth: .infinity)

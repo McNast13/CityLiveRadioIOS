@@ -1,10 +1,10 @@
 {
   "images" : [
     {
+      "filename" : "Logo 1024.PNG",
       "idiom" : "universal",
       "platform" : "ios",
-      "size" : "1024x1024",
-      "filename" : "icon-1024.png"
+      "size" : "1024x1024"
     },
     {
       "appearances" : [
@@ -13,10 +13,10 @@
           "value" : "dark"
         }
       ],
+      "filename" : "Logo 1025.PNG",
       "idiom" : "universal",
       "platform" : "ios",
-      "size" : "1024x1024",
-      "filename" : "icon-1024.png"
+      "size" : "1024x1024"
     },
     {
       "appearances" : [
@@ -25,10 +25,10 @@
           "value" : "tinted"
         }
       ],
+      "filename" : "Logo 1026.PNG",
       "idiom" : "universal",
       "platform" : "ios",
-      "size" : "1024x1024",
-      "filename" : "icon-1024.png"
+      "size" : "1024x1024"
     }
   ],
   "info" : {
