@@ -455,15 +455,17 @@ struct ListenAgainView: View {
         let id = UUID()
         let title: String
         let url: URL
+        // Asset name for the show's thumbnail/icon. Default per-show values set below.
+        let imageName: String
     }
 
     private var shows: [Show] = [
-        Show(title: "Not The 9 O'Clock Show", url: URL(string: "https://cityliveradiouk.co.uk/Streaming/ListenAgain/NTNOCS.mp3")!),
-        Show(title: "Red Bearded Viking Show", url: URL(string: "https://cityliveradiouk.co.uk/Streaming/ListenAgain/RBV.mp3")!),
-        Show(title: "The Country Mile", url: URL(string: "https://cityliveradiouk.co.uk/Streaming/ListenAgain/CM.mp3")!),
-        Show(title: "Ginger and Nuts", url: URL(string: "https://cityliveradiouk.co.uk/Streaming/ListenAgain/GingerandNuts.mp3")!),
-        Show(title: "Weekend Anthems", url: URL(string: "https://cityliveradiouk.co.uk/Streaming/ListenAgain/WeekendAnthems.mp3")!),
-        Show(title: "Saturday Club Classics", url: URL(string: "https://cityliveradiouk.co.uk/Streaming/ListenAgain/scc.mp3")!)
+        Show(title: "Not The 9 O'Clock Show", url: URL(string: "https://cityliveradiouk.co.uk/Streaming/ListenAgain/NTNOCS.mp3")!, imageName: "NineOclock"),
+        Show(title: "Red Bearded Viking Show", url: URL(string: "https://cityliveradiouk.co.uk/Streaming/ListenAgain/RBV.mp3")!, imageName: "RedBeard"),
+        Show(title: "The Country Mile", url: URL(string: "https://cityliveradiouk.co.uk/Streaming/ListenAgain/CM.mp3")!, imageName: "CountryMile"),
+        Show(title: "Ginger and Nuts", url: URL(string: "https://cityliveradiouk.co.uk/Streaming/ListenAgain/GingerandNuts.mp3")!, imageName: "GingerNuts"),
+        Show(title: "Weekend Anthems", url: URL(string: "https://cityliveradiouk.co.uk/Streaming/ListenAgain/WeekendAnthems.mp3")!, imageName: "WeekendAnthems"),
+        Show(title: "Saturday Club Classics", url: URL(string: "https://cityliveradiouk.co.uk/Streaming/ListenAgain/scc.mp3")!, imageName: "ClubClassics")
     ]
 
     var body: some View {
@@ -498,16 +500,18 @@ struct ListenAgainView: View {
                     ForEach(shows) { show in
                         let isPlaying = (radio.currentStreamURL == show.url && radio.isPlaying)
                         HStack(spacing: 12) {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(Color.gray.opacity(0.15))
-                                    .frame(width: 64, height: 64)
-                                Image(systemName: "music.note.list")
-                                    .resizable()
-                                    .scaledToFit()
-                                    .frame(width: 30, height: 30)
-                                    .foregroundColor(.white.opacity(0.9))
-                            }
+                            // Per-show thumbnail image (defaults to cityLogo). Each show has its own `imageName` so you can swap images later.
+                            Image(show.imageName)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 64, height: 64)
+                                .clipped()
+                                .cornerRadius(8)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                                )
+                                .accessibilityHidden(true)
 
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(show.title)
@@ -575,7 +579,7 @@ struct ListenAgainView: View {
             .background(Color.black)
         } // VStack root
         .background(Color.black.ignoresSafeArea())
-        .navigationTitle("Listen Again")
+        //.navigationTitle("Listen Again")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             // Pause any live playback when entering the Listen Again screen
