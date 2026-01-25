@@ -157,6 +157,7 @@ final class RadioPlayer: NSObject, ObservableObject {
         guard let metadata = metadata, !metadata.isEmpty else { DispatchQueue.main.async { self.trackInfo = nil; self.artwork = nil }; return }
         var title: String?; var artist: String?
         for item in metadata {
+            print("updateMetadata: item key=\(String(describing: item.commonKey?.rawValue)), value=\(String(describing: item.value))")
             let stringVal = (item.value(forKey: "stringValue") as? String) ?? (item.value(forKey: "value") as? String)
             if let key = item.commonKey?.rawValue {
                 switch key.lowercased() {
@@ -254,7 +255,6 @@ final class RadioPlayer: NSObject, ObservableObject {
 
             guard let url = components.url else {
                 print("fetchArtworkFromiTunes: failed to build URL with term='\(term)'")
-                DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
                 return
             }
             print("fetchArtworkFromiTunes: URL -> \(url.absoluteString)")
@@ -304,8 +304,7 @@ final class RadioPlayer: NSObject, ObservableObject {
             _ = sem.wait(timeout: .now() + 6)
 
             if let err = itError {
-                print("fetchArtworkFromiTunes: network error: \(err.localizedDescription) - using PHLogo placeholder")
-                DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
+                print("fetchArtworkFromiTunes: network error: \(err.localizedDescription)")
                 return
             }
 
@@ -314,8 +313,7 @@ final class RadioPlayer: NSObject, ObservableObject {
 
             guard var artStr = artworkURLString else {
                 let termValue = components.queryItems?.first(where: { $0.name == "term" })?.value ?? term
-                print("fetchArtworkFromiTunes: no artwork URL found for term='\(termValue)' - using PHLogo placeholder")
-                DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
+                print("fetchArtworkFromiTunes: no artwork URL found for term='\(termValue)'")
                 return
             }
 
@@ -330,8 +328,7 @@ final class RadioPlayer: NSObject, ObservableObject {
             }
 
             guard let artURL = URL(string: artStr) else {
-                print("fetchArtworkFromiTunes: invalid artwork URL string: \(artStr) - using PHLogo placeholder")
-                DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
+                print("fetchArtworkFromiTunes: invalid artwork URL string: \(artStr)")
                 return
             }
 
@@ -358,8 +355,7 @@ final class RadioPlayer: NSObject, ObservableObject {
             _ = imgSem.wait(timeout: .now() + 6)
 
             if let err = imgError {
-                print("fetchArtworkFromiTunes: image network error: \(err.localizedDescription) - falling back to PHLogo")
-                DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
+                print("fetchArtworkFromiTunes: image network error: \(err.localizedDescription)")
                 return
             }
             if let s = imgRespStatus { print("fetchArtworkFromiTunes: final image HTTP status = \(s)") }
@@ -368,8 +364,7 @@ final class RadioPlayer: NSObject, ObservableObject {
                 print("fetchArtworkFromiTunes: successfully downloaded artwork, size=\(d.count) bytes")
                 DispatchQueue.main.async { self.artwork = ui }
             } else {
-                print("fetchArtworkFromiTunes: failed to download or decode artwork - using PHLogo placeholder")
-                DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
+                print("fetchArtworkFromiTunes: failed to download or decode artwork")
             }
         }
     }
@@ -497,195 +492,6 @@ struct ContentView: View {
             }
         }
         #endif
-    }
-}
-
-struct ListenAgainView: View {
-    @EnvironmentObject private var radio: RadioPlayer
-
-    struct Show: Identifiable {
-        let id: String
-        let title: String
-        let url: URL
-        let imageName: String
-        init(title: String, url: URL, imageName: String) { self.id = url.absoluteString; self.title = title; self.url = url; self.imageName = imageName }
-    }
-
-    private var shows: [Show] = [
-        Show(title: "Not The 9 O'Clock Show", url: URL(string: "https://cityliveradiouk.co.uk/Streaming/ListenAgain/NTNOCS.mp3")!, imageName: "NineOclock"),
-        Show(title: "Red Bearded Viking Show", url: URL(string: "https://cityliveradiouk.co.uk/Streaming/ListenAgain/RBV.mp3")!, imageName: "RedBeard"),
-        Show(title: "The Country Mile", url: URL(string: "https://cityliveradiouk.co.uk/Streaming/ListenAgain/CM.mp3")!, imageName: "CountryMile"),
-        Show(title: "Ginger and Nuts", url: URL(string: "https://cityliveradiouk.co.uk/Streaming/ListenAgain/GingerandNuts.mp3")!, imageName: "GingerNuts"),
-        Show(title: "Weekend Anthems", url: URL(string: "https://cityliveradiouk.co.uk/Streaming/ListenAgain/WeekendAnthems.mp3")!, imageName: "WeekendAnthems"),
-        Show(title: "Saturday Club Classics", url: URL(string: "https://cityliveradiouk.co.uk/Streaming/ListenAgain/scc.mp3")!, imageName: "ClubClassics")
-    ]
-
-    @State private var selectedShowID: String? = nil
-
-    var body: some View {
-        GeometryReader { geo in
-            VStack(spacing:0) {
-                // TOP 60%: header + scrollable list on a light gray background with border
-                VStack(spacing: 0) {
-                    // Centered header
-                    Text("Listen Again")
-                        .font(.largeTitle)
-                        .bold()
-                        .foregroundColor(Color.primary)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding([.horizontal, .top])
-
-                    ScrollView {
-                        LazyVStack(spacing: 12) {
-                            ForEach(shows) { show in
-                                // Determine if this show is playing by comparing the RadioPlayer.playingShowID
-                                let isPlaying = (radio.playingShowID == show.id && radio.isPlaying)
-
-                                HStack(spacing: 12) {
-                                    Image(show.imageName)
-                                        .resizable()
-                                        .scaledToFill()
-                                        .frame(width: 64, height: 64)
-                                        .clipped()
-                                        .cornerRadius(8)
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 8)
-                                                .stroke(Color(UIColor.separator), lineWidth: 0.5)
-                                        )
-
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(show.title)
-                                            .foregroundColor(Color.primary)
-                                            .font(.headline)
-                                            .lineLimit(2)
-                                        Text(show.url.host ?? "")
-                                            .font(.caption)
-                                            .foregroundColor(Color.secondary)
-                                    }
-
-                                    Spacer()
-
-                                    Button(action: {
-                                        withAnimation {
-                                            print("ListenAgain button tapped for show=\(show.title), isPlaying=\(isPlaying), selectedShowID=\(String(describing: selectedShowID))")
-                                            if isPlaying {
-                                                // stop current show and clear selection
-                                                radio.stop()
-                                                selectedShowID = nil
-                                            } else {
-                                                // select and play this show
-                                                selectedShowID = show.id
-                                                radio.playStream(url: show.url)
-                                            }
-                                        }
-                                    }) {
-                                        HStack(spacing: 8) {
-                                            Image(systemName: isPlaying ? "stop.fill" : "play.fill")
-                                            Text(isPlaying ? "Stop" : "Play")
-                                        }
-                                        .font(.subheadline)
-                                        .padding(.vertical, 8)
-                                        .padding(.horizontal, 12)
-                                        .background(isPlaying ? Color.red : Color.accentColor)
-                                        .foregroundColor(.white)
-                                        .clipShape(Capsule())
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                                .padding(12)
-                                .background(Color(UIColor.systemBackground))
-                                .cornerRadius(12)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 12)
-                                        .stroke(Color(UIColor.separator).opacity(0.6), lineWidth: 1)
-                                )
-                                .padding(.horizontal, 16)
-                            } // ForEach
-                        } // LazyVStack
-                        .padding(.vertical, 12)
-                    } // ScrollView
-                } // top VStack
-                .frame(height: geo.size.height * 0.6)
-                .padding(.horizontal, 12)
-                .background(
-                    RoundedRectangle(cornerRadius: 14)
-                        .fill(Color(UIColor.systemGray6))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14)
-                        .stroke(Color(UIColor.separator).opacity(0.9), lineWidth: 2)
-                )
-                .padding(.top, 8)
-
-                // BOTTOM 40%: black background (same as main view), shows artwork or PHLogo placeholder
-                ZStack {
-                    Color.black
-
-                    if let sel = selectedShowID, let show = shows.first(where: { $0.id == sel }), radio.playingShowID == show.id && radio.isPlaying {
-                        if let art = radio.artwork {
-                            Image(uiImage: art)
-                                .resizable()
-                                .scaledToFit()
-                                .cornerRadius(12)
-                                .shadow(radius: 8)
-                                .padding(20)
-                        } else {
-                            Image(show.imageName)
-                                .resizable()
-                                .scaledToFit()
-                                .cornerRadius(12)
-                                .shadow(radius: 8)
-                                .padding(20)
-                        }
-                    } else {
-                        Image("PHLogo")
-                            .resizable()
-                            .scaledToFit()
-                            .cornerRadius(12)
-                            .shadow(radius: 4)
-                            .padding(24)
-                    }
-                }
-                .frame(height: geo.size.height * 0.4)
-            } // VStack root
-            .background(Color.black.ignoresSafeArea())
-            .onAppear {
-                // Pause live playback when showing Listen Again
-                radio.pause()
-            }
-            .onDisappear {
-                // When leaving ListenAgain, restore live player (without autoplay)
-                radio.restoreLive()
-                selectedShowID = nil
-            }
-        } // GeometryReader
-        .onChange(of: radio.isPlaying) { _old, isPlaying in
-            if !isPlaying {
-                // when playback stops, clear any selected show so UI updates to 'Play'
-                selectedShowID = nil
-            }
-        }
-        .onChange(of: radio.playingShowID) { _old, playingID in
-            // When the player sets which show is playing, reflect that in selection so the row turns to Stop
-            if let pid = playingID {
-                selectedShowID = pid
-            } else {
-                selectedShowID = nil
-            }
-        }
-        .onChange(of: radio.currentStreamURL) { _old, newURL in
-            // When the player's current stream changes, select the matching show (if any)
-            if let u = newURL {
-                if let match = shows.first(where: { $0.url.absoluteString == u.absoluteString }) {
-                    selectedShowID = match.id
-                } else {
-                    // external stream (e.g., live) — clear selection
-                    selectedShowID = nil
-                }
-            } else {
-                selectedShowID = nil
-            }
-        }
     }
 }
 
