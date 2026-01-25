@@ -138,3 +138,25 @@ Contact
 License
 -------
 This project bundles references to third-party streams; ensure you have permission before redistributing recordings. The code is provided as-is.
+
+App icon filenames and exact pixel sizes
+---------------------------------------
+Add the following PNG files to `CityLiveRadio/CityLiveRadio/Assets.xcassets/AppIcon.appiconset` (these are the exact filenames and the pixel dimensions iOS expects for each slot):
+
+- AppIcon-20x20@2x.png — 40 × 40 px (20pt @2x)
+- AppIcon-20x20@3x.png — 60 × 60 px (20pt @3x)
+- AppIcon-29x29@2x.png — 58 × 58 px (29pt @2x)
+- AppIcon-29x29@3x.png — 87 × 87 px (29pt @3x)
+- AppIcon-40x40@2x.png — 80 × 80 px (40pt @2x)
+- AppIcon-40x40@3x.png — 120 × 120 px (40pt @3x)
+- AppIcon-60x60@2x.png — 120 × 120 px (60pt @2x)
+- AppIcon-60x60@3x.png — 180 × 180 px (60pt @3x)
+- AppIcon-76x76@1x.png — 76 × 76 px (76pt @1x)
+- AppIcon-76x76@2x.png — 152 × 152 px (76pt @2x)
+- AppIcon-83.5x83.5@2x.png — 167 × 167 px (83.5pt @2x)
+- AppIcon-1024x1024@1x.png — 1024 × 1024 px (App Store / large icon)
+
+Notes:
+- Filenames are case-sensitive. Place these files directly in the `AppIcon.appiconset` folder and ensure `Contents.json` references the same filenames.
+- The best-quality source is a square 1024×1024 PNG; resize down to the exact dimensions above to avoid scaling artifacts.
+- After replacing icons, clean the build and reinstall the app on device (uninstall first) to ensure iOS updates the displayed icon (SpringBoard caches icons).
