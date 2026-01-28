@@ -166,7 +166,15 @@ struct ListenAgainView: View {
                 }
                 .frame(height: geo.size.height * 0.4)
             } // VStack root
-            .background(Color.black.ignoresSafeArea())
+            // Replace the previous solid black background with the same top->bottom gradient used in ContentView
+            .background(
+                LinearGradient(
+                    gradient: Gradient(colors: [Color.white, Color.black]),
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+            )
             .onAppear {
                 // Pause live playback when showing Listen Again
                 radio.pause()

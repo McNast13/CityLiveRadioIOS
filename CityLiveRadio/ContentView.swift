@@ -270,10 +270,13 @@ final class RadioPlayer: NSObject, ObservableObject {
                 if let err = err {
                     itError = err
                     print("fetchArtworkFromiTunes: request error: \(err.localizedDescription)")
+                    // show placeholder artwork on network error
+                    DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
                     return
                 }
                 guard let http = resp as? HTTPURLResponse else {
                     print("fetchArtworkFromiTunes: non-HTTP response")
+                    DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
                     return
                 }
                 httpStatus = http.statusCode
@@ -292,12 +295,17 @@ final class RadioPlayer: NSObject, ObservableObject {
                             print("fetchArtworkFromiTunes: found artworkUrl100 = \(art)")
                         } else {
                             print("fetchArtworkFromiTunes: no artworkUrl100 in first result; keys=\(first.keys)")
+                            // no artwork found in iTunes result -> show placeholder
+                            DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
                         }
                     } else {
                         print("fetchArtworkFromiTunes: unexpected JSON structure or no results")
+                        // no results -> show placeholder
+                        DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
                     }
                 } catch {
                     print("fetchArtworkFromiTunes: JSON parse error: \(error)")
+                    DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
                 }
             }
             task.resume()
@@ -305,6 +313,8 @@ final class RadioPlayer: NSObject, ObservableObject {
 
             if let err = itError {
                 print("fetchArtworkFromiTunes: network error: \(err.localizedDescription)")
+                // network error earlier -> ensure placeholder
+                DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
                 return
             }
 
@@ -314,6 +324,8 @@ final class RadioPlayer: NSObject, ObservableObject {
             guard var artStr = artworkURLString else {
                 let termValue = components.queryItems?.first(where: { $0.name == "term" })?.value ?? term
                 print("fetchArtworkFromiTunes: no artwork URL found for term='\(termValue)'")
+                // no artwork URL found -> set placeholder image
+                DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
                 return
             }
 
@@ -329,6 +341,7 @@ final class RadioPlayer: NSObject, ObservableObject {
 
             guard let artURL = URL(string: artStr) else {
                 print("fetchArtworkFromiTunes: invalid artwork URL string: \(artStr)")
+                DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
                 return
             }
 
@@ -343,6 +356,8 @@ final class RadioPlayer: NSObject, ObservableObject {
                 if let err = err {
                     imgError = err
                     print("fetchArtworkFromiTunes: image download err: \(err.localizedDescription)")
+                    // image download error -> placeholder
+                    DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
                     return
                 }
                 if let http = resp as? HTTPURLResponse {
@@ -356,6 +371,7 @@ final class RadioPlayer: NSObject, ObservableObject {
 
             if let err = imgError {
                 print("fetchArtworkFromiTunes: image network error: \(err.localizedDescription)")
+                DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
                 return
             }
             if let s = imgRespStatus { print("fetchArtworkFromiTunes: final image HTTP status = \(s)") }
@@ -365,6 +381,7 @@ final class RadioPlayer: NSObject, ObservableObject {
                 DispatchQueue.main.async { self.artwork = ui }
             } else {
                 print("fetchArtworkFromiTunes: failed to download or decode artwork")
+                DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
             }
         }
     }
@@ -459,28 +476,25 @@ struct ContentView: View {
                 }
                 .padding()
             }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Menu {
-                        Button(action: { showListenAgain = true }) {
-                            Label("Listen Again", systemImage: "clock.arrow.circlepath")
-                        }
-                        Button(action: { openContactMail() }) {
-                            Label("Contact Us", systemImage: "envelope")
-                        }
-                    } label: {
-                        Image(systemName: "line.horizontal.3")
-                            .font(.title2)
-                            .foregroundColor(.white)
-                            .accessibilityLabel("Menu")
-                            .padding(.leading, 4)
-                    }
-                }
-            }
+            .overlay(
+                TopMenuView(isListenAgainActive: showListenAgain,
+                            onCityLive: {
+                                showListenAgain = false
+                                radio.restoreLive()
+                            },
+                            onListenAgain: {
+                                showListenAgain = true
+                            },
+                            onContact: { openContactMail() })
+                    .padding(.bottom, currentBottomSafeArea())
+                    .zIndex(1000),
+                alignment: .bottom
+            )
             .navigationDestination(isPresented: $showListenAgain) {
                 ListenAgainView().environmentObject(radio)
             }
         }
+        .navigationBarHidden(true)
     }
 
     private func openContactMail() {
@@ -491,6 +505,25 @@ struct ContentView: View {
                 UIApplication.shared.open(url, options: [:], completionHandler: nil)
             }
         }
+        #endif
+    }
+
+    // Return bottom safe area inset for the current window (iOS)
+    private func currentBottomSafeArea() -> CGFloat {
+        #if canImport(UIKit)
+        // Try to get the first connected window scene's safe area inset
+        let scenes = UIApplication.shared.connectedScenes
+        for scene in scenes {
+            if let ws = scene as? UIWindowScene {
+                if let window = ws.windows.first(where: { $0.isKeyWindow }) {
+                    return window.safeAreaInsets.bottom
+                }
+            }
+        }
+        // Fallback
+        return UIApplication.shared.windows.first?.safeAreaInsets.bottom ?? 0
+        #else
+        return 0
         #endif
     }
 }
