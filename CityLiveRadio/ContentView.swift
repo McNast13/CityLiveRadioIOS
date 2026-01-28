@@ -490,7 +490,7 @@ struct ContentView: View {
                     .zIndex(1000),
                 alignment: .bottom
             )
-            .navigationDestination(isPresented: $showListenAgain) {
+            .fullScreenCover(isPresented: $showListenAgain) {
                 ListenAgainView().environmentObject(radio)
             }
         }
@@ -511,17 +511,15 @@ struct ContentView: View {
     // Return bottom safe area inset for the current window (iOS)
     private func currentBottomSafeArea() -> CGFloat {
         #if canImport(UIKit)
-        // Try to get the first connected window scene's safe area inset
-        let scenes = UIApplication.shared.connectedScenes
-        for scene in scenes {
-            if let ws = scene as? UIWindowScene {
-                if let window = ws.windows.first(where: { $0.isKeyWindow }) {
-                    return window.safeAreaInsets.bottom
-                }
-            }
+        if #available(iOS 15.0, *) {
+            return UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap { $0.windows }
+                .first(where: { $0.isKeyWindow })?
+                .safeAreaInsets.bottom ?? 0
+        } else {
+            return UIApplication.shared.keyWindow?.safeAreaInsets.bottom ?? 0
         }
-        // Fallback
-        return UIApplication.shared.windows.first?.safeAreaInsets.bottom ?? 0
         #else
         return 0
         #endif

@@ -5,6 +5,7 @@ import UIKit
 
 struct ListenAgainView: View {
     @EnvironmentObject private var radio: RadioPlayer
+    @Environment(\.dismiss) private var dismiss
 
     struct Show: Identifiable {
         let id: String
@@ -34,6 +35,18 @@ struct ListenAgainView: View {
         if let contains = shows.first(where: { id.contains($0.id) }) { return contains.imageName }
         if let contained = shows.first(where: { $0.id.contains(id) }) { return contained.imageName }
         return nil
+    }
+
+    // Local helper to open Mail app for Contact Us
+    private func openContactMail() {
+        #if canImport(UIKit)
+        let to = "contactus@cityliveradio.co.uk"
+        if let url = URL(string: "mailto:\(to)") {
+            DispatchQueue.main.async {
+                UIApplication.shared.open(url, options: [:], completionHandler: nil)
+            }
+        }
+        #endif
     }
 
     // Small helper to build a show row — extracted to top-level of the struct to reduce body complexity
@@ -125,77 +138,125 @@ struct ListenAgainView: View {
             .onAppear { print("bottomArtwork -> showing=\(imgToShow) selected=\(String(describing: selectedShowID)) playing=\(String(describing: radio.playingShowID)) currentStream=\(String(describing: radio.currentStreamURL))") }
     }
 
+    // Small subview for the top 60% list area (broken out to help the compiler)
+    @ViewBuilder
+    private func topArea(height: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            // Centered header
+            Text("Listen Again")
+                .font(.largeTitle)
+                .bold()
+                .foregroundColor(Color.primary)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding([.horizontal, .top])
+
+            ScrollView {
+                LazyVStack(spacing: 12) {
+                    ForEach(shows) { show in
+                        showRow(show)
+                    }
+                }
+                .padding(.vertical, 12)
+            }
+        }
+        .frame(height: height)
+        .padding(.horizontal, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(Color(UIColor.systemGray6))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(Color(UIColor.separator).opacity(0.9), lineWidth: 2)
+        )
+        .padding(.top, 8)
+    }
+
+    @ViewBuilder
+    private func bottomArea(height: CGFloat) -> some View {
+        ZStack {
+            Color.black
+            bottomArtwork()
+        }
+        .frame(height: height)
+    }
+
+    // Return bottom safe area inset for the current window (iOS)
+    private func currentBottomSafeArea() -> CGFloat {
+        #if canImport(UIKit)
+        if #available(iOS 15.0, *) {
+            return UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap { $0.windows }
+                .first(where: { $0.isKeyWindow })?
+                .safeAreaInsets.bottom ?? 0
+        } else {
+            return UIApplication.shared.keyWindow?.safeAreaInsets.bottom ?? 0
+        }
+        #else
+        return 0
+        #endif
+    }
+
     var body: some View {
         GeometryReader { geo in
-            VStack(spacing:0) {
-                // TOP 60%: header + scrollable list on a light gray background with border
-                VStack(spacing: 0) {
-                    // Centered header
-                    Text("Listen Again")
-                        .font(.largeTitle)
-                        .bold()
-                        .foregroundColor(Color.primary)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding([.horizontal, .top])
+            let topH = geo.size.height * 0.6
+            let bottomH = geo.size.height - topH
+            VStack(spacing: 0) {
+                topArea(height: topH)
+                bottomArea(height: bottomH)
 
-                    ScrollView {
-                        LazyVStack(spacing: 12) {
-                            ForEach(shows) { show in
-                                showRow(show)
-                            }
-                         } // LazyVStack
-                         .padding(.vertical, 12)
-                     } // ScrollView
-                 } // top VStack
-                 .frame(height: geo.size.height * 0.6)
-                 .padding(.horizontal, 12)
-                 .background(
-                     RoundedRectangle(cornerRadius: 14)
-                         .fill(Color(UIColor.systemGray6))
-                 )
-                 .overlay(
-                     RoundedRectangle(cornerRadius: 14)
-                         .stroke(Color(UIColor.separator).opacity(0.9), lineWidth: 2)
-                 )
-                 .padding(.top, 8)
-
-                // BOTTOM 40%: black background (same as main view), shows artwork or PHLogo placeholder
-                ZStack {
-                    Color.black
-                    bottomArtwork()
-                }
-                .frame(height: geo.size.height * 0.4)
-            } // VStack root
-            // Replace the previous solid black background with the same top->bottom gradient used in ContentView
-            .background(
-                LinearGradient(
-                    gradient: Gradient(colors: [Color.white, Color.black]),
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
-            )
+                TopMenuView(isListenAgainActive: true,
+                            onCityLive: {
+                                radio.restoreLive()
+                                dismiss()
+                            },
+                            onListenAgain: {
+                                selectedShowID = nil
+                                bottomImageName = nil
+                                radio.pause()
+                            },
+                            onContact: { openContactMail() })
+                    .padding(.bottom, currentBottomSafeArea() + 8)
+                    .zIndex(1000)
+            }
+            .background(Color.black.ignoresSafeArea())
             .onAppear {
-                // Pause live playback when showing Listen Again
                 radio.pause()
-                // initialize bottom image from current selection/player
                 bottomImageName = imageNameForID(selectedShowID) ?? imageNameForID(radio.playingShowID) ?? imageNameForID(radio.currentStreamURL?.absoluteString)
             }
             .onDisappear {
-                // When leaving ListenAgain, restore live player (without autoplay)
                 radio.restoreLive()
                 selectedShowID = nil
             }
-         } // GeometryReader
-         .onChange(of: radio.isPlaying) { _old, isPlaying in
-             if !isPlaying {
-                 // when playback stops, clear any selected show so UI updates to 'Play'
-                 selectedShowID = nil
-             }
-         }
-         .onChange(of: radio.playingShowID) { _old, playingID in
-             // When the player sets which show is playing, reflect that in selection so the row turns to Stop
-             if let pid = playingID {
+        } // GeometryReader
+        // Hide the automatic navigation back button when embedded in a NavigationStack
+          .navigationBarBackButtonHidden(true)
+          // Disable interactive pop (swipe-to-go-back) to prevent users from navigating back
+          .background(NavigationConfigurator { nav in
+               nav.interactivePopGestureRecognizer?.isEnabled = false
+               // Ensure the top view controller has no back button and the navigation bar is hidden
+               nav.topViewController?.navigationItem.hidesBackButton = true
+               nav.setNavigationBarHidden(true, animated: false)
+           })
+          // Ensure the navigation bar is hidden to prevent any visible back controls
+          .navigationBarHidden(true)
+          // Ensure there's no leading toolbar item (extra defense against back chevron)
+          .toolbar {
+              ToolbarItem(placement: .navigationBarLeading) {
+                  // empty to suppress default back button
+                  EmptyView()
+              }
+          }
+          .onChange(of: radio.isPlaying) { _old, isPlaying in
+              if !isPlaying {
+                  // when playback stops, clear any selected show so UI updates to 'Play'
+                  selectedShowID = nil
+              }
+          }
+          .onChange(of: radio.playingShowID) { _old, playingID in
+              // When the player sets which show is playing, reflect that in selection so the row turns to Stop
+              if let pid = playingID {
                  selectedShowID = pid
              } else {
                  selectedShowID = nil
