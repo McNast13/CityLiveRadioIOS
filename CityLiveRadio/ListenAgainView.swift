@@ -200,8 +200,11 @@ struct ListenAgainView: View {
 
     var body: some View {
         GeometryReader { geo in
-            let topH = geo.size.height * 0.6
-            let bottomH = geo.size.height - topH
+            // Reserve 10% of the screen height for the persistent TopMenuView
+            let usable = geo.size.height * 0.90
+            // Keep a 60/40 split of the usable area for the list and artwork
+            let topH = usable * 0.6
+            let bottomH = usable * 0.4
             VStack(spacing: 0) {
                 topArea(height: topH)
                 bottomArea(height: bottomH)
