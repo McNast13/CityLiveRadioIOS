@@ -49,6 +49,15 @@ struct ListenAgainView: View {
         #endif
     }
 
+    // Local helper to open the about page in the default browser
+    private func openAboutPage() {
+        #if canImport(UIKit)
+        if let url = URL(string: "https://www.cityliveradio.co.uk/about-us") {
+            DispatchQueue.main.async { UIApplication.shared.open(url, options: [:], completionHandler: nil) }
+        }
+        #endif
+    }
+
     // Small helper to build a show row — extracted to top-level of the struct to reduce body complexity
     @ViewBuilder
     private func showRow(_ show: Show) -> some View {
@@ -125,7 +134,7 @@ struct ListenAgainView: View {
         let imgToShow = bottomImageName
             ?? imageNameForID(selectedShowID)
             ?? imageNameForID(radio.playingShowID)
-            ?? "PHLogo"
+            ?? "ListenAgainLogo"
 
         Image(imgToShow)
             .renderingMode(.original)
@@ -200,9 +209,8 @@ struct ListenAgainView: View {
 
     var body: some View {
         GeometryReader { geo in
-            // Reserve 10% of the screen height for the persistent TopMenuView
+            // Reserve 10% of total height for the persistent TopMenuView; split remaining 90% 60/40
             let usable = geo.size.height * 0.90
-            // Keep a 60/40 split of the usable area for the list and artwork
             let topH = usable * 0.6
             let bottomH = usable * 0.4
             VStack(spacing: 0) {
@@ -219,7 +227,8 @@ struct ListenAgainView: View {
                                 bottomImageName = nil
                                 radio.pause()
                             },
-                            onContact: { openContactMail() })
+                            onContact: { openContactMail() },
+                            onInfo: { openAboutPage() })
                     .padding(.bottom, currentBottomSafeArea() + 8)
                     .zIndex(1000)
             }

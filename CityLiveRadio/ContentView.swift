@@ -12,10 +12,7 @@ import Combine
 import UIKit
 #endif
 
-public protocol PlayerProtocol {
-    func play()
-    func pause()
-}
+// `PlayerProtocol` is defined in PlayerProtocol.swift
 
 final class RadioPlayer: NSObject, ObservableObject {
     @Published var isPlaying: Bool = false
@@ -400,6 +397,15 @@ extension RadioPlayer: AVPlayerItemMetadataOutputPushDelegate {
 struct ContentView: View {
     @StateObject private var radio = RadioPlayer()
     @State private var showListenAgain: Bool = false
+    // Disable the play button temporarily (on first load and when returning from ListenAgain)
+    @State private var playDisabled: Bool = true
+
+    private func disablePlayTemporarily(_ seconds: TimeInterval = 3.0) {
+        playDisabled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
+            playDisabled = false
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -427,6 +433,7 @@ struct ContentView: View {
                         .frame(minWidth: 140)
                         .padding(.vertical, 12)
                     }
+                    .disabled(playDisabled)
                     .buttonStyle(.borderedProminent)
                     .tint(.white)
                     .accessibilityLabel(radio.isPlaying ? "Stop radio" : "Play radio")
@@ -485,7 +492,8 @@ struct ContentView: View {
                             onListenAgain: {
                                 showListenAgain = true
                             },
-                            onContact: { openContactMail() })
+                            onContact: { openContactMail() },
+                            onInfo: { openAboutPage() })
                     .padding(.bottom, currentBottomSafeArea())
                     .zIndex(1000),
                 alignment: .bottom
@@ -495,6 +503,13 @@ struct ContentView: View {
             }
         }
         .navigationBarHidden(true)
+        .onAppear { disablePlayTemporarily() }
+        .onChange(of: showListenAgain) { newValue in
+            if !newValue {
+                // when returning from ListenAgain view, disable play briefly
+                disablePlayTemporarily()
+            }
+        }
     }
 
     private func openContactMail() {
@@ -504,6 +519,14 @@ struct ContentView: View {
             DispatchQueue.main.async {
                 UIApplication.shared.open(url, options: [:], completionHandler: nil)
             }
+        }
+        #endif
+    }
+
+    private func openAboutPage() {
+        #if canImport(UIKit)
+        if let url = URL(string: "https://www.cityliveradio.co.uk/about-us") {
+            DispatchQueue.main.async { UIApplication.shared.open(url, options: [:], completionHandler: nil) }
         }
         #endif
     }

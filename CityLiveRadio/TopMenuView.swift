@@ -5,6 +5,7 @@ struct TopMenuView: View {
     var onCityLive: () -> Void
     var onListenAgain: () -> Void
     var onContact: () -> Void
+    var onInfo: () -> Void
 
     var body: some View {
         HStack(spacing: 16) {
@@ -34,6 +35,15 @@ struct TopMenuView: View {
                         .font(.caption2)
                 }
             }
+            Spacer()
+            Button(action: onInfo) {
+                VStack(spacing: 4) {
+                    Image(systemName: "info.circle")
+                        .font(.title2)
+                    Text("Info")
+                        .font(.caption2)
+                }
+            }
         }
         .foregroundColor(.primary)
         .padding(.vertical, 10)
@@ -58,7 +68,7 @@ struct VisualEffectBlur: UIViewRepresentable {
 
 struct TopMenuView_Previews: PreviewProvider {
     static var previews: some View {
-        TopMenuView(isListenAgainActive: false, onCityLive: {}, onListenAgain: {}, onContact: {})
+        TopMenuView(isListenAgainActive: false, onCityLive: {}, onListenAgain: {}, onContact: {}, onInfo: {})
             .previewLayout(.sizeThatFits)
             .padding()
     }
