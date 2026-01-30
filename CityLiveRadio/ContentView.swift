@@ -1,4 +1,3 @@
-//
 //  ContentView.swift
 //  CityLiveRadio
 //
@@ -12,29 +11,23 @@ import Combine
 import UIKit
 #endif
 
-// Protocol used by tests to inject a mock player implementation.
-public protocol PlayerProtocol {
-    func play()
-    func pause()
-}
+// `PlayerProtocol` is defined in PlayerProtocol.swift
 
-// Small ObservableObject that manages an AVPlayer for the radio stream.
 final class RadioPlayer: NSObject, ObservableObject {
     @Published var isPlaying: Bool = false
     @Published var trackInfo: String? = nil
     @Published var currentStreamURL: URL? = nil
+    // id (url.absoluteString) of the show that's currently playing (if any)
+    @Published var playingShowID: String? = nil
     @Published var artwork: UIImage? = nil
+    // Current playback time (seconds) - updated after seeks complete
+    @Published var currentTime: Double? = nil
 
     private var player: AVPlayer?
     private var metadataOutput: AVPlayerItemMetadataOutput?
-
-    // Optional injected player (used by unit tests)
     private var testPlayer: PlayerProtocol? = nil
-
-    // canonical live stream URL
     private let liveStreamURL = URL(string: "https://streaming.live365.com/a91939")!
 
-    // Convenience initializer for tests to inject a mock player
     convenience init(player: PlayerProtocol) {
         self.init()
         self.testPlayer = player
@@ -42,9 +35,7 @@ final class RadioPlayer: NSObject, ObservableObject {
 
     override init() {
         super.init()
-        // Prepare live stream but don't autoplay
         preparePlayer(with: liveStreamURL, autoPlay: false)
-
         #if os(iOS)
         do {
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
@@ -52,122 +43,173 @@ final class RadioPlayer: NSObject, ObservableObject {
         } catch {
             print("Audio session setup failed: \(error)")
         }
+        NotificationCenter.default.addObserver(self, selector: #selector(handleAudioSessionInterruption(_:)), name: AVAudioSession.interruptionNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(handleRouteChange(_:)), name: AVAudioSession.routeChangeNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(handleDidEnterBackground(_:)), name: UIApplication.didEnterBackgroundNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(handleWillEnterForeground(_:)), name: UIApplication.willEnterForegroundNotification, object: nil)
         #endif
     }
 
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
     private func preparePlayer(with url: URL, autoPlay: Bool) {
-        // remove old metadata output
+        print("preparePlayer: url=\(url.absoluteString) autoPlay=\(autoPlay)")
         if let currentItem = player?.currentItem, let output = metadataOutput {
             currentItem.remove(output)
         }
-
-        // clear artwork until new metadata arrives
         DispatchQueue.main.async { self.artwork = nil }
-
         let item = AVPlayerItem(url: url)
         metadataOutput = AVPlayerItemMetadataOutput(identifiers: nil)
         metadataOutput?.setDelegate(self, queue: DispatchQueue.main)
         if let output = metadataOutput { item.add(output) }
-
         player = AVPlayer(playerItem: item)
+        player?.automaticallyWaitsToMinimizeStalling = false
         currentStreamURL = url
+        print("preparePlayer: set currentStreamURL=\(currentStreamURL?.absoluteString ?? "nil")")
 
         if autoPlay {
+            #if os(iOS)
+            do { try AVAudioSession.sharedInstance().setActive(true) } catch { print("Failed to activate audio session before play: \(error)") }
+            #endif
             player?.play()
-            DispatchQueue.main.async { self.isPlaying = true }
+            DispatchQueue.main.async {
+                self.playingShowID = url.absoluteString
+                self.isPlaying = true
+            }
+            print("preparePlayer: started playback, isPlaying set true, playingShowID=\(url.absoluteString)")
         }
     }
 
-    // Play the currently configured player, or recreate the live player if none
     func play() {
-        // If a test player was injected, delegate to it for unit tests
         if let test = testPlayer {
             test.play()
             DispatchQueue.main.async { self.isPlaying = true }
             return
         }
-        if player == nil {
-            // recreate the live player and start
-            preparePlayer(with: liveStreamURL, autoPlay: true)
-            return
-        }
+        #if os(iOS)
+        do { try AVAudioSession.sharedInstance().setActive(true) } catch { print("play(): could not activate audio session: \(error)") }
+        #endif
+        if player == nil { preparePlayer(with: liveStreamURL, autoPlay: true); return }
         player?.play()
         DispatchQueue.main.async { self.isPlaying = true }
     }
 
     func pause() {
-        if let test = testPlayer {
-            test.pause()
-            DispatchQueue.main.async { self.isPlaying = false }
-            return
-        }
+        if let test = testPlayer { test.pause(); DispatchQueue.main.async { self.isPlaying = false }; return }
         player?.pause()
         DispatchQueue.main.async { self.isPlaying = false }
     }
 
-    // Stop playback and clear current player (used when switching streams)
     func stop() {
+        print("RadioPlayer.stop() called")
         if testPlayer != nil {
-            // For injected test player just update state
             DispatchQueue.main.async {
                 self.isPlaying = false
                 self.currentStreamURL = nil
                 self.trackInfo = nil
                 self.artwork = nil
+                self.playingShowID = nil
             }
             return
         }
-        player?.pause()
-        player = nil
+        player?.pause(); player = nil
         DispatchQueue.main.async {
             self.isPlaying = false
             self.currentStreamURL = nil
             self.trackInfo = nil
             self.artwork = nil
+            self.playingShowID = nil
         }
+        print("RadioPlayer.stop(): player paused and cleared; isPlaying will be false; currentStreamURL cleared")
     }
 
-    // Restore live player (prepare but do not autoplay)
     func restoreLive() {
-        // If live already prepared and player exists, just pause
-        if currentStreamURL == liveStreamURL {
-            pause()
-            return
-        }
-        stop()
-        preparePlayer(with: liveStreamURL, autoPlay: false)
+        if currentStreamURL == liveStreamURL { pause(); return }
+        stop(); preparePlayer(with: liveStreamURL, autoPlay: false)
     }
 
-    // Toggle play/pause
-    func toggle() {
-        if isPlaying { pause() } else { play() }
-    }
+    func toggle() { if isPlaying { pause() } else { play() } }
 
-    // Play an arbitrary listen-again stream: stop current and prepare new
     func playStream(url: URL) {
-        if currentStreamURL == url {
-            if !isPlaying { play() }
+        print("playStream: requested url=\(url.absoluteString)")
+        // If tests inject testPlayer, make playStream simulate starting playback
+        if testPlayer != nil {
+            DispatchQueue.main.async {
+                self.currentStreamURL = url
+                self.playingShowID = url.absoluteString
+                self.isPlaying = true
+            }
+            // call underlying test player's play to simulate
+            testPlayer?.play()
+            print("playStream: testPlayer mode - set currentStreamURL & isPlaying")
             return
         }
         stop()
         preparePlayer(with: url, autoPlay: true)
+        print("playStream: finished prepare for url=\(url.absoluteString)")
     }
 
-    // Metadata parsing
-    func updateMetadata(from metadata: [AVMetadataItem]?) {
-        guard let metadata = metadata, !metadata.isEmpty else {
-            DispatchQueue.main.async { self.trackInfo = nil; self.artwork = nil }
+    // Seek helpers: only perform seek if current item is seekable (non-live VOD streams)
+    func seek(by seconds: Double) {
+        guard let player = player, let currentItem = player.currentItem else {
+            print("seek: no player or current item")
             return
         }
+        // Check if seekableTimeRanges indicate seek support
+        let ranges = currentItem.seekableTimeRanges
+        guard !ranges.isEmpty else {
+            print("seek: current item is not seekable (likely live stream)")
+            return
+        }
+        let current = player.currentTime()
+        let currentSecs = CMTimeGetSeconds(current)
+        let durationSecs = currentItem.duration.isIndefinite ? nil : Optional(currentItem.duration.seconds)
+        var target = currentSecs + seconds
+        if let dur = durationSecs {
+            target = max(0, min(target, dur))
+        } else {
+            target = max(0, target)
+        }
+        let time = CMTime(seconds: target, preferredTimescale: current.timescale)
+        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+            DispatchQueue.main.async {
+                print("seek(by: \(seconds)) completed -> newTime=\(CMTimeGetSeconds(time)) finished=\(finished)")
+                // Publish the new current time so views can show a HUD
+                self.currentTime = CMTimeGetSeconds(time)
+            }
+        }
+    }
 
-        var title: String?
-        var artist: String?
+    func seekForward(_ seconds: Double = 15) { seek(by: seconds) }
+    func seekBackward(_ seconds: Double = 15) { seek(by: -seconds) }
+
+    fileprivate func updateMetadata(from metadata: [AVMetadataItem]?) {
+        // Modern API migration for stringValue (async for iOS 16+)
+        Task { await self.updateMetadataAsync(from: metadata) }
+        return
+    }
+
+    @MainActor
+    fileprivate func updateMetadataAsync(from metadata: [AVMetadataItem]?) async {
+        guard let metadata = metadata, !metadata.isEmpty else { self.trackInfo = nil; self.artwork = nil; return }
+        var title: String?; var artist: String?
         for item in metadata {
-            let stringVal = (item.value(forKey: "stringValue") as? String) ?? (item.value(forKey: "value") as? String)
+            let valueDescription: String
+            let stringVal: String?
+            if #available(iOS 16.0, *) {
+                stringVal = try? await item.load(.stringValue)
+                valueDescription = stringVal ?? "nil"
+            } else {
+                stringVal = item.stringValue ?? (item.value(forKey: "value") as? String)
+                valueDescription = stringVal ?? (item.value(forKey: "value").map { String(describing: $0) } ?? "nil")
+            }
+            print("updateMetadata: item key=\(String(describing: item.commonKey?.rawValue)), value=\(valueDescription)")
             if let key = item.commonKey?.rawValue {
                 switch key.lowercased() {
-                case "title": title = title ?? stringVal
-                case "artist": artist = artist ?? stringVal
+                case "title": if title == nil { title = stringVal }
+                case "artist": if artist == nil { artist = stringVal }
                 default: break
                 }
             } else if let v = stringVal {
@@ -175,13 +217,68 @@ final class RadioPlayer: NSObject, ObservableObject {
             }
         }
         let combined: String? = (artist != nil && title != nil) ? "\(artist!) — \(title!)" : (title ?? artist)
-        DispatchQueue.main.async { self.trackInfo = combined }
-
-        // Primary artwork source: iTunes Search API — use title (and artist if available)
+        self.trackInfo = combined
         if let t = title {
             print("updateMetadata: attempting iTunes artwork fetch for title='\(t)' artist='\(artist ?? "nil")'")
             fetchArtworkFromiTunes(artist: artist, title: t)
         }
+    }
+
+    // MARK: - Audio session & interruption handling
+    @objc private func handleAudioSessionInterruption(_ note: Notification) {
+        guard let info = note.userInfo,
+              let typeValue = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
+
+        switch type {
+        case .began:
+            // Interruption began — pause playback (e.g., incoming phone call)
+            print("handleAudioSessionInterruption: began")
+            pause()
+        case .ended:
+            // Interruption ended — if should resume, resume playback
+            let optionsValue = info[AVAudioSessionInterruptionOptionKey] as? UInt
+            let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue ?? 0)
+            print("handleAudioSessionInterruption: ended, options=\(options)")
+            if options.contains(.shouldResume) {
+                // small delay to allow system to settle
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    if self.currentStreamURL != nil {
+                        self.play()
+                    }
+                }
+            }
+        @unknown default:
+            break
+        }
+    }
+
+    @objc private func handleRouteChange(_ note: Notification) {
+        guard let info = note.userInfo,
+              let reasonValue = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue) else { return }
+        print("handleRouteChange: reason=\(reason)")
+        if reason == .oldDeviceUnavailable {
+            // e.g., headphones unplugged — pause the audio
+            pause()
+        }
+    }
+
+    @objc private func handleDidEnterBackground(_ note: Notification) {
+        // Ensure audio session remains active in background. With Background Modes (audio) enabled this keeps playback running.
+        #if os(iOS)
+        do {
+            try AVAudioSession.sharedInstance().setActive(true)
+            print("handleDidEnterBackground: audio session kept active")
+        } catch {
+            print("handleDidEnterBackground: failed to keep audio session active: \(error)")
+        }
+        #endif
+    }
+
+    @objc private func handleWillEnterForeground(_ note: Notification) {
+        // Nothing special required, but log for diagnostics
+        print("handleWillEnterForeground: called")
     }
 
     // MARK: - iTunes Search API lookup (primary)
@@ -222,10 +319,13 @@ final class RadioPlayer: NSObject, ObservableObject {
                 if let err = err {
                     itError = err
                     print("fetchArtworkFromiTunes: request error: \(err.localizedDescription)")
+                    // show placeholder artwork on network error
+                    DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
                     return
                 }
                 guard let http = resp as? HTTPURLResponse else {
                     print("fetchArtworkFromiTunes: non-HTTP response")
+                    DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
                     return
                 }
                 httpStatus = http.statusCode
@@ -244,12 +344,17 @@ final class RadioPlayer: NSObject, ObservableObject {
                             print("fetchArtworkFromiTunes: found artworkUrl100 = \(art)")
                         } else {
                             print("fetchArtworkFromiTunes: no artworkUrl100 in first result; keys=\(first.keys)")
+                            // no artwork found in iTunes result -> show placeholder
+                            DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
                         }
                     } else {
                         print("fetchArtworkFromiTunes: unexpected JSON structure or no results")
+                        // no results -> show placeholder
+                        DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
                     }
                 } catch {
                     print("fetchArtworkFromiTunes: JSON parse error: \(error)")
+                    DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
                 }
             }
             task.resume()
@@ -257,6 +362,8 @@ final class RadioPlayer: NSObject, ObservableObject {
 
             if let err = itError {
                 print("fetchArtworkFromiTunes: network error: \(err.localizedDescription)")
+                // network error earlier -> ensure placeholder
+                DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
                 return
             }
 
@@ -266,6 +373,8 @@ final class RadioPlayer: NSObject, ObservableObject {
             guard var artStr = artworkURLString else {
                 let termValue = components.queryItems?.first(where: { $0.name == "term" })?.value ?? term
                 print("fetchArtworkFromiTunes: no artwork URL found for term='\(termValue)'")
+                // no artwork URL found -> set placeholder image
+                DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
                 return
             }
 
@@ -281,6 +390,7 @@ final class RadioPlayer: NSObject, ObservableObject {
 
             guard let artURL = URL(string: artStr) else {
                 print("fetchArtworkFromiTunes: invalid artwork URL string: \(artStr)")
+                DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
                 return
             }
 
@@ -295,6 +405,8 @@ final class RadioPlayer: NSObject, ObservableObject {
                 if let err = err {
                     imgError = err
                     print("fetchArtworkFromiTunes: image download err: \(err.localizedDescription)")
+                    // image download error -> placeholder
+                    DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
                     return
                 }
                 if let http = resp as? HTTPURLResponse {
@@ -308,6 +420,7 @@ final class RadioPlayer: NSObject, ObservableObject {
 
             if let err = imgError {
                 print("fetchArtworkFromiTunes: image network error: \(err.localizedDescription)")
+                DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
                 return
             }
             if let s = imgRespStatus { print("fetchArtworkFromiTunes: final image HTTP status = \(s)") }
@@ -317,6 +430,7 @@ final class RadioPlayer: NSObject, ObservableObject {
                 DispatchQueue.main.async { self.artwork = ui }
             } else {
                 print("fetchArtworkFromiTunes: failed to download or decode artwork")
+                DispatchQueue.main.async { self.artwork = UIImage(named: "PHLogo") }
             }
         }
     }
@@ -335,6 +449,15 @@ extension RadioPlayer: AVPlayerItemMetadataOutputPushDelegate {
 struct ContentView: View {
     @StateObject private var radio = RadioPlayer()
     @State private var showListenAgain: Bool = false
+    // Disable the play button temporarily (on first load and when returning from ListenAgain)
+    @State private var playDisabled: Bool = true
+
+    private func disablePlayTemporarily(_ seconds: TimeInterval = 2.0) {
+        playDisabled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
+            playDisabled = false
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -362,6 +485,7 @@ struct ContentView: View {
                         .frame(minWidth: 140)
                         .padding(.vertical, 12)
                     }
+                    .disabled(playDisabled)
                     .buttonStyle(.borderedProminent)
                     .tint(.white)
                     .accessibilityLabel(radio.isPlaying ? "Stop radio" : "Play radio")
@@ -411,28 +535,27 @@ struct ContentView: View {
                 }
                 .padding()
             }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Menu {
-                        Button(action: { showListenAgain = true }) {
-                            Label("Listen Again", systemImage: "clock.arrow.circlepath")
-                        }
-                        Button(action: { openContactMail() }) {
-                            Label("Contact Us", systemImage: "envelope")
-                        }
-                    } label: {
-                        Image(systemName: "line.horizontal.3")
-                            .font(.title2)
-                            .foregroundColor(.white)
-                            .accessibilityLabel("Menu")
-                            .padding(.leading, 4)
-                    }
-                }
-            }
-            .navigationDestination(isPresented: $showListenAgain) {
+            .overlay(
+                TopMenuView(isListenAgainActive: showListenAgain,
+                            onCityLive: {
+                                showListenAgain = false
+                                radio.restoreLive()
+                            },
+                            onListenAgain: {
+                                showListenAgain = true
+                            },
+                            onContact: { openContactMail() },
+                            onInfo: { openAboutPage() })
+                    .padding(.bottom, currentBottomSafeArea())
+                    .zIndex(1000),
+                alignment: .bottom
+            )
+            .fullScreenCover(isPresented: $showListenAgain, onDismiss: { disablePlayTemporarily() }) {
                 ListenAgainView().environmentObject(radio)
             }
         }
+        .navigationBarHidden(true)
+        .onAppear { disablePlayTemporarily() }
     }
 
     private func openContactMail() {
@@ -445,152 +568,32 @@ struct ContentView: View {
         }
         #endif
     }
-}
 
-struct ListenAgainView: View {
-    @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var radio: RadioPlayer
-
-    struct Show: Identifiable {
-        let id = UUID()
-        let title: String
-        let url: URL
-        // Asset name for the show's thumbnail/icon. Default per-show values set below.
-        let imageName: String
+    private func openAboutPage() {
+        #if canImport(UIKit)
+        if let url = URL(string: "https://www.cityliveradio.co.uk/about-us") {
+            DispatchQueue.main.async { UIApplication.shared.open(url, options: [:], completionHandler: nil) }
+        }
+        #endif
     }
 
-    private var shows: [Show] = [
-        Show(title: "Not The 9 O'Clock Show", url: URL(string: "https://cityliveradiouk.co.uk/Streaming/ListenAgain/NTNOCS.mp3")!, imageName: "NineOclock"),
-        Show(title: "Red Bearded Viking Show", url: URL(string: "https://cityliveradiouk.co.uk/Streaming/ListenAgain/RBV.mp3")!, imageName: "RedBeard"),
-        Show(title: "The Country Mile", url: URL(string: "https://cityliveradiouk.co.uk/Streaming/ListenAgain/CM.mp3")!, imageName: "CountryMile"),
-        Show(title: "Ginger and Nuts", url: URL(string: "https://cityliveradiouk.co.uk/Streaming/ListenAgain/GingerandNuts.mp3")!, imageName: "GingerNuts"),
-        Show(title: "Weekend Anthems", url: URL(string: "https://cityliveradiouk.co.uk/Streaming/ListenAgain/WeekendAnthems.mp3")!, imageName: "WeekendAnthems"),
-        Show(title: "Saturday Club Classics", url: URL(string: "https://cityliveradiouk.co.uk/Streaming/ListenAgain/scc.mp3")!, imageName: "ClubClassics")
-    ]
-
-    var body: some View {
-        VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Listen Again")
-                    .font(.largeTitle)
-                    .bold()
-                    .foregroundColor(.white)
-
-                if let current = radio.currentStreamURL, radio.isPlaying, let playing = shows.first(where: { $0.url == current }) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "play.circle.fill")
-                            .foregroundColor(.green)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Now playing")
-                                .font(.caption)
-                                .foregroundColor(.gray)
-                            Text(playing.title)
-                                .font(.headline)
-                                .foregroundColor(.white)
-                                .lineLimit(1)
-                        }
-                        Spacer()
-                    }
-                }
-            }
-            .padding([.top, .horizontal], 16)
-
-            ScrollView {
-                LazyVStack(spacing: 12) {
-                    ForEach(shows) { show in
-                        let isPlaying = (radio.currentStreamURL == show.url && radio.isPlaying)
-                        HStack(spacing: 12) {
-                            // Per-show thumbnail image (defaults to cityLogo). Each show has its own `imageName` so you can swap images later.
-                            Image(show.imageName)
-                                .resizable()
-                                .scaledToFill()
-                                .frame(width: 64, height: 64)
-                                .clipped()
-                                .cornerRadius(8)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .stroke(Color.white.opacity(0.06), lineWidth: 1)
-                                )
-                                .accessibilityHidden(true)
-
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(show.title)
-                                    .foregroundColor(.white)
-                                    .font(.headline)
-                                    .lineLimit(2)
-                                Text(show.url.host ?? "")
-                                    .font(.caption)
-                                    .foregroundColor(.gray)
-                            }
-
-                            Spacer()
-
-                            Button(action: {
-                                withAnimation {
-                                    if isPlaying {
-                                        radio.stop()
-                                    } else {
-                                        radio.playStream(url: show.url)
-                                    }
-                                }
-                            }) {
-                                HStack(spacing: 8) {
-                                    Image(systemName: isPlaying ? "stop.fill" : "play.fill")
-                                    Text(isPlaying ? "Stop" : "Play")
-                                }
-                                .font(.subheadline)
-                                .padding(.vertical, 8)
-                                .padding(.horizontal, 12)
-                                .background(isPlaying ? Color.red : Color.accentColor)
-                                .foregroundColor(.white)
-                                .clipShape(Capsule())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .padding(12)
-                        .background(Color.white.opacity(0.03))
-                        .cornerRadius(12)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(Color.white.opacity(0.03), lineWidth: 1)
-                        )
-                        .padding(.horizontal, 16)
-                    } // ForEach(shows)
-                } // LazyVStack
-                .padding(.vertical, 12)
-            } // ScrollView
-
-            // Bottom Back button
-            VStack {
-                Button(action: {
-                    radio.restoreLive()
-                    dismiss()
-                }) {
-                    Text("Back")
-                        .bold()
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                }
-                .background(Color.white)
-                .foregroundColor(.black)
-                .cornerRadius(12)
-                .padding(16)
-            }
-            .background(Color.black)
-        } // VStack root
-        .background(Color.black.ignoresSafeArea())
-        //.navigationTitle("Listen Again")
-        .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            // Pause any live playback when entering the Listen Again screen
-            radio.pause()
+    // Return bottom safe area inset for the current window (iOS)
+    private func currentBottomSafeArea() -> CGFloat {
+        #if canImport(UIKit)
+        if #available(iOS 15.0, *) {
+            return UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap { $0.windows }
+                .first(where: { $0.isKeyWindow })?
+                .safeAreaInsets.bottom ?? 0
+        } else {
+            return UIApplication.shared.keyWindow?.safeAreaInsets.bottom ?? 0
         }
-        .onDisappear {
-            // Ensure listen-again playback is stopped and live is restored when leaving
-            radio.restoreLive()
-        }
-    } // body
-} // struct ListenAgainView
+        #else
+        return 0
+        #endif
+    }
+}
 
 // Preview for SwiftUI canvas
 #Preview {

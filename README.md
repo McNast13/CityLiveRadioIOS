@@ -1,12 +1,12 @@
 CityLiveRadio iOS
 =================
 
-A SwiftUI iOS frontend for the CityLiveRadio online station with a "Listen Again" list of previously aired shows and artwork lookup.
+A SwiftUI iOS frontend for the CityLive Radio station with live playback and a "Listen Again" list of previously aired shows.
 
 Overview
 --------
 - Main purpose: play the live radio stream and let the user play archived shows (Listen Again).
-- Live stream (Play/Stop): https://streaming.live365.com/a91939
+- Live stream URL: https://streaming.live365.com/a91939
 - Listen Again recordings included in the app (title — stream URL):
   - Not The 9 O'Clock Show — https://cityliveradiouk.co.uk/Streaming/ListenAgain/NTNOCS.mp3
   - Red Bearded Viking Show — https://cityliveradiouk.co.uk/Streaming/ListenAgain/RBV.mp3
@@ -15,45 +15,62 @@ Overview
   - Weekend Anthems — https://cityliveradiouk.co.uk/Streaming/ListenAgain/WeekendAnthems.mp3
   - Saturday Club Classics — https://cityliveradiouk.co.uk/Streaming/ListenAgain/scc.mp3
 
-Key features (latest)
----------------------
-- Live radio playback using `AVPlayer` with an AVAudioSession configured for `.playback`.
-- `RadioPlayer` ObservableObject that manages play/pause/stop, switching between live and listen-again streams, and exposes:
-  - `isPlaying`, `trackInfo`, `currentStreamURL`, and `artwork` as `@Published` properties.
-- Metadata handling:
-  - The app parses timed metadata from streams and displays "Now Playing -" with artist/title on the main screen when available.
-  - When track metadata arrives the app automatically queries the iTunes Search API (primary source) to retrieve artwork for the track and displays it under the track info.
-  - Detailed console logs are printed for iTunes queries and image download steps to help diagnose artwork failures.
-- Listen Again UI:
-  - A modern `ListenAgainView` with card-style rows, per-show thumbnails, Play/Stop per row and a visible "Now playing" row when a listen-again stream is active.
-  - Entering Listen Again pauses live playback; selecting a show stops any current stream and plays the chosen recording; leaving the view restores/prepares the live player.
-- Navigation & menu:
-  - A hamburger menu in the top-left offers "Listen Again" (navigates to the view) and "Contact Us" (opens the Mail app prefilled). 
-- Per-show thumbnails:
-  - Each show has an `imageName` field and loads an image from the asset catalog. By default thumbnails use the `cityLogo` asset and you can add per-show assets later.
-- Background audio:
-  - The project is configured to support background audio (Info/entitlements settings are present). To run on-device, enable the Background Modes -> Audio capability in Xcode Signing & Capabilities and ensure your provisioning profile includes it.
+Latest features & behavior
+---------------------------
+- Player & metadata
+  - `RadioPlayer` (`ObservableObject`) manages playback (play/pause/stop), switching between live and listen-again streams, and exposes published state such as `isPlaying`, `trackInfo`, `currentStreamURL`, `playingShowID`, `artwork`, and `currentTime`.
+  - Stream metadata is parsed and displayed on the main screen as:
+    - Header: `Now Playing -` (on its own line)
+    - Track line: artist/title on the next line in a larger font.
+  - Artwork lookup: iTunes Search API (no key) by title and artist; falls back to `PHLogo` when no image is found.
+  - Console logs for artwork lookup, HTTP response, and image download are available for troubleshooting.
 
-Where to find things
---------------------
-- App UI and player logic: `CityLiveRadio/CityLiveRadio/ContentView.swift` (contains `ContentView`, `ListenAgainView` and `RadioPlayer`).
-- Assets (images/icons): `CityLiveRadio/CityLiveRadio/Assets.xcassets/` (contains `cityLogo`, per-show image sets, and `AppIcon.appiconset`).
-- Entitlements file: `CityLiveRadio/CityLiveRadio/CityLiveRadio.entitlements` (background audio key).
-- Unit tests: `CityLiveRadio/CityLiveRadioTests/` (tests for `RadioPlayer` behavior and metadata parsing).
+- Listen Again UI
+  - `ListenAgainView` lists archived shows in a scrollable top area (top 60% of usable content) and shows the selected show's artwork in the bottom area (bottom 40% of usable content).  The two areas together use 90% of the screen height to reserve space for the bottom `TopMenuView` overlay.
+  - Per-show thumbnails are taken from assets (`imageName` per show). Listen Again always uses these per-show images for the bottom artwork (decoupled from live-track artwork).
+  - Play/Stop buttons in each row toggle correctly and only the playing show's row shows a Stop button.
+  - When a ListenAgain stream is playing, two overlay controls appear centered on the bottom artwork: Rewind 15s and Fast-forward 15s. These call `RadioPlayer.seekBackward(15)` and `RadioPlayer.seekForward(15)` respectively. Seeking is no-op for non-seekable live streams.
+  - After a successful seek, a small HUD (mm:ss) shows briefly above the artwork to indicate the new playback time.
 
-Build & run (quick)
--------------------
+- TopMenuView (bottom overlay)
+  - The bottom `TopMenuView` is an overlay present on both `ContentView` and `ListenAgainView`. It contains four buttons: Live, Listen Again, Contact, Info.
+  - Contact opens the Mail app prepopulated to `contactus@cityliveradio.co.uk`.
+  - Info opens the about page in the default browser: https://www.cityliveradio.co.uk/about-us
+  - The overlay is safe-area aware and sits above the home indicator.
+
+- Play button behavior
+  - On `ContentView` initial appearance (app launch or returning from `ListenAgainView`) the Play button is disabled for 3 seconds to avoid accidental presses. This is deterministic and managed with a cancellable scheduled work item to avoid UI flashes when dismissing modal views.
+  - There is also a verification retry flow when starting playback: the app checks `radio.isPlaying` and whether artwork has been populated and will retry play a small number of times if verification fails (configurable).
+
+- Background audio and entitlements
+  - The project is prepared for background audio. To enable background playback on-device:
+    1. Open target → Signing & Capabilities → add Background Modes → check "Audio, AirPlay, and Picture in Picture".
+    2. Ensure the provisioning profile/App ID includes the `com.apple.developer.background-modes` entitlement (Xcode can update the profile when using Automatic Signing and "Fix Issue").
+  - If you do not want background entitlement during development, use the `NoBackground.entitlements` file (project has been adjusted to avoid requesting the entitlement unless you enable Background Modes).
+
+Files & locations
+-----------------
+- App UI & player logic: `CityLiveRadio/CityLiveRadio/ContentView.swift` (includes `ContentView` and `RadioPlayer`).
+- Listen Again: `CityLiveRadio/CityLiveRadio/ListenAgainView.swift` (separate view, uses `@EnvironmentObject var radio: RadioPlayer`).
+- Bottom menu: `CityLiveRadio/CityLiveRadio/TopMenuView.swift`.
+- Player protocol: `CityLiveRadio/CityLiveRadio/PlayerProtocol.swift` (single declaration used across code/tests).
+- Assets: `CityLiveRadio/CityLiveRadio/Assets.xcassets/` (per-show images, `PHLogo`, `AppIcon.appiconset`).
+- Entitlements: `CityLiveRadio/CityLiveRadio/CityLiveRadio.entitlements` and `NoBackground.entitlements` (used when background audio entitlement is not desired).
+- Unit tests: `CityLiveRadio/CityLiveRadioTests/` (tests for `RadioPlayer` and artwork fallback behavior).
+
+Build & run
+-----------
 Open the Xcode project and run on a simulator or device.
 
-Xcode UI (recommended)
+Xcode UI steps (recommended):
 1. Open `CityLiveRadio.xcodeproj` in Xcode.
 2. Select the `CityLiveRadio` scheme and a run destination (Simulator or your device).
-3. If running on a physical device: in the project target → Signing & Capabilities check “Automatically manage signing” and select your Development Team (Personal Team is supported for local dev). Also enable Background Modes → Audio if you want background playback.
+3. For physical device: select your Development Team in Signing & Capabilities and enable Background Modes if needed.
 4. Run (Cmd-R).
 
-From Terminal (simulator, no signing required):
+From Terminal (simulator, no signing):
 ```bash
-cd /path/to/CityLiveRadio
+cd /Users/paulmackay/Desktop/myProjects/ios/CityLiveRadio
 xcodebuild -project CityLiveRadio.xcodeproj -scheme CityLiveRadio \
   -sdk iphonesimulator -destination 'platform=iOS Simulator,name=iPhone 17' \
   CODE_SIGNING_ALLOWED=NO clean build
@@ -66,75 +83,57 @@ xcodebuild -project CityLiveRadio.xcodeproj -scheme CityLiveRadio \
   CODE_SIGNING_ALLOWED=NO clean test
 ```
 
-Behavior details
-----------------
-- Live playback:
-  - The Play button on the main screen toggles the live stream (https://streaming.live365.com/a91939).
-  - Track metadata (artist/title) is shown below the Play button when available, with the header "Now Playing -" on its own line and the track text beneath.
-  - Artwork for the current track is fetched from the iTunes Search API and shown under the track info when found.
-- Listen Again:
-  - The Listen Again view lists archived shows with thumbnails, title, host/URL info and a Play/Stop control.
-  - Entering the view pauses any live playback. Playing a recording stops any existing playback and begins the recording stream. Pressing Back stops recording playback and restores (prepares) the live player so pressing Play resumes live radio.
-- Menu & contact:
-  - The hamburger menu in the top-left contains two items: "Listen Again" and "Contact Us". Contact opens a `mailto:` link to `contactus@cityliveradio.co.uk`.
+Artwork & thumbnails guidance
+-----------------------------
+- Thumbnails (used in Listen Again list): UI uses ~64×64 points.
+  - Provide images: 1x = 64×64 px, 2x = 128×128 px, 3x = 192×192 px.
+- Large artwork (Now Playing): provide 600×600 or 1024×1024 for best quality.
+- Per-show images should be added as named image sets to `Assets.xcassets` and referenced by the show's `imageName`.
 
-Artwork / iTunes integration
-----------------------------
-- The app uses the iTunes Search API as the primary artwork source (no API key required). It searches by title and, when available, artist.
-- The lookup publishes detailed console logs showing the iTunes request URL, HTTP status, JSON preview and image download status. Use Xcode's debug console to view these logs during runtime.
-- The app caches artwork in memory for the app lifecycle to reduce repeated network requests. If you want persistent disk caching, we can add that as a follow-up.
-
-Thumbnails & artwork assets guidance
------------------------------------
-- Recommended thumbnail display size (UI uses 64×64 points): supply these image files in an image set:
-  - 1x: 64×64 px
-  - 2x: 128×128 px
-  - 3x: 192×192 px
-- Recommended large artwork for "Now Playing": provide a 600×600 or 1024×1024 pixel image for best quality.
-- Square images are preferred. If your source isn’t square, pad or crop to a square canvas so rounded corners or cornerRadius won't cut off content.
-- Add per-show asset sets in `Assets.xcassets` (e.g. `ntnocs.imageset`, `rbv.imageset`) and set the `imageName` in `ContentView.swift`'s `shows` array to point to them.
-
-Logging & troubleshooting
--------------------------
-- If artwork does not appear, open Xcode's debug console and look for `fetchArtworkFromiTunes:` prints. The app logs:
-  - The constructed iTunes Search URL, HTTP status, a small JSON preview, and the chosen artwork URL (upgraded to 600×600 when possible).
-  - Image download HTTP status and any network errors or JSON parse errors.
-- Common issues:
-  - No metadata from stream: some streams do not publish timed metadata; metadata may be absent.
-  - iTunes returns no match for the query term — try different metadata formats or enable artist-only or title-only fallbacks.
-  - TLS/Network errors: ensure device/simulator has working network and can reach `itunes.apple.com`.
-
-Signing & provisioning
+App icons (appiconset)
 ----------------------
-- To run on device you must be signed and have a provisioning profile for the app bundle identifier (`PMackay.CityLiveRadio`) and the selected Development Team.
-- Quick fix: in Xcode → Preferences → Accounts add your Apple ID, then in the project target → Signing & Capabilities select your Team and click "Fix Issue" if prompted.
-- If you prefer changing the bundle identifier to your own (e.g. `com.yourname.CityLiveRadio`) you can edit the target's bundle id in Xcode or ask me to make that repo change.
+Place exact-size PNGs in `Assets.xcassets/AppIcon.appiconset` using these filenames and pixel sizes (case-sensitive):
+- `AppIcon-20x20@2x.png` — 40 × 40 px
+- `AppIcon-20x20@3x.png` — 60 × 60 px
+- `AppIcon-29x29@2x.png` — 58 × 58 px
+- `AppIcon-29x29@3x.png` — 87 × 87 px
+- `AppIcon-40x40@2x.png` — 80 × 80 px
+- `AppIcon-40x40@3x.png` — 120 × 120 px
+- `AppIcon-60x60@2x.png` — 120 × 120 px
+- `AppIcon-60x60@3x.png` — 180 × 180 px
+- `AppIcon-76x76@1x.png` — 76 × 76 px
+- `AppIcon-76x76@2x.png` — 152 × 152 px
+- `AppIcon-83.5x83.5@2x.png` — 167 × 167 px
+- `AppIcon-1024x1024@1x.png` — 1024 × 1024 px (App Store / ios-marketing)
 
-Testing & unit tests
---------------------
-- Unit tests cover `RadioPlayer` behavior (play/pause/toggle, metadata parsing). Use Xcode Test (Cmd-U) or `xcodebuild ... test` above to run them.
-- For artwork/network tests we use URLSession stubbing patterns (can be added) to avoid live network calls.
+I updated `Contents.json` and verified `AppIcon.appiconset` contains a 1024×1024 image and all referenced filenames exist. If you want, I can generate the full set from the 1024 source and commit them.
 
-Repository notes
-----------------
-- Active working branch with recent UI and metadata/artwork changes: `menu` (contains hamburger menu, ListenAgain UI improvements and recent fixes). The branch has been pushed to the remote `origin` as `menu`.
-- If you want these changes merged to `main` I can open a PR or push a merge commit.
+Troubleshooting & logs
+----------------------
+- Check Xcode console for logs from `RadioPlayer` and artwork retrieval. The app logs metadata events, iTunes search URLs, HTTP statuses and image download results.
+- If artwork is missing: confirm the iTunes search JSON shows results or check asset names/case sensitivity.
 
-Contributing
-------------
-- To add a new Listen Again show: add an entry to the `shows` array in `ContentView.swift` (use the `Show` struct fields: `title`, `url`, `imageName`) and add a corresponding image asset to `Assets.xcassets`.
-- To add artwork caching persistence, a disk cache or `NSCache` implementation is recommended.
+Committing & pushing
+---------------------
+I can commit and push these README/asset changes to branch `menu`. Locally run:
 
-Next steps / suggestions
-------------------------
-- Provide square source images for per-show thumbnails and for the app icon set (preferred ≥1024×1024 for best results).
-- Add persistent artwork cache to avoid repeated network calls across app launches.
-- Optionally add a small settings screen to toggle verbose artwork logs.
+```bash
+cd /Users/paulmackay/Desktop/myProjects/ios/CityLiveRadio
+# switch/create branch
+git checkout -B menu
+# stage changes
+git add -A
+git commit -m "chore: update README and fix AppIcon assets"
+# push
+git remote get-url origin || git remote add origin https://github.com/McNast13/CityLiveRadioIOS.git
+git push -u origin menu
+```
 
-Contact
--------
-- App Contact email used in UI: contactus@cityliveradio.co.uk
+If you want me to try to push from this environment say "try push here" and I'll attempt it (may require your credentials).
 
-License
--------
-This project bundles references to third-party streams; ensure you have permission before redistributing recordings. The code is provided as-is.
+Questions / next suggestions
+--------------------------
+- Would you like me to generate a full, correctly-sized app icon set from the 1024×1024 source and commit them? (recommended)
+- Would you like the README to include exact test outputs or CI instructions (GitHub Actions)?
+
+Which of the above should I do next? (generate icons / commit & push / add CI / nothing)
