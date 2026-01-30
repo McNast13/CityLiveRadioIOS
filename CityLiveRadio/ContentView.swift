@@ -1,4 +1,3 @@
-//
 //  ContentView.swift
 //  CityLiveRadio
 //
@@ -21,6 +20,8 @@ final class RadioPlayer: NSObject, ObservableObject {
     // id (url.absoluteString) of the show that's currently playing (if any)
     @Published var playingShowID: String? = nil
     @Published var artwork: UIImage? = nil
+    // Current playback time (seconds) - updated after seeks complete
+    @Published var currentTime: Double? = nil
 
     private var player: AVPlayer?
     private var metadataOutput: AVPlayerItemMetadataOutput?
@@ -150,22 +151,73 @@ final class RadioPlayer: NSObject, ObservableObject {
         print("playStream: finished prepare for url=\(url.absoluteString)")
     }
 
-    func updateMetadata(from metadata: [AVMetadataItem]?) {
-        guard let metadata = metadata, !metadata.isEmpty else { DispatchQueue.main.async { self.trackInfo = nil; self.artwork = nil }; return }
+    // Seek helpers: only perform seek if current item is seekable (non-live VOD streams)
+    func seek(by seconds: Double) {
+        guard let player = player, let currentItem = player.currentItem else {
+            print("seek: no player or current item")
+            return
+        }
+        // Check if seekableTimeRanges indicate seek support
+        let ranges = currentItem.seekableTimeRanges
+        guard !ranges.isEmpty else {
+            print("seek: current item is not seekable (likely live stream)")
+            return
+        }
+        let current = player.currentTime()
+        let currentSecs = CMTimeGetSeconds(current)
+        let durationSecs = currentItem.duration.isIndefinite ? nil : Optional(currentItem.duration.seconds)
+        var target = currentSecs + seconds
+        if let dur = durationSecs {
+            target = max(0, min(target, dur))
+        } else {
+            target = max(0, target)
+        }
+        let time = CMTime(seconds: target, preferredTimescale: current.timescale)
+        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+            DispatchQueue.main.async {
+                print("seek(by: \(seconds)) completed -> newTime=\(CMTimeGetSeconds(time)) finished=\(finished)")
+                // Publish the new current time so views can show a HUD
+                self.currentTime = CMTimeGetSeconds(time)
+            }
+        }
+    }
+
+    func seekForward(_ seconds: Double = 15) { seek(by: seconds) }
+    func seekBackward(_ seconds: Double = 15) { seek(by: -seconds) }
+
+    fileprivate func updateMetadata(from metadata: [AVMetadataItem]?) {
+        // Modern API migration for stringValue (async for iOS 16+)
+        Task { await self.updateMetadataAsync(from: metadata) }
+        return
+    }
+
+    @MainActor
+    fileprivate func updateMetadataAsync(from metadata: [AVMetadataItem]?) async {
+        guard let metadata = metadata, !metadata.isEmpty else { self.trackInfo = nil; self.artwork = nil; return }
         var title: String?; var artist: String?
         for item in metadata {
-            print("updateMetadata: item key=\(String(describing: item.commonKey?.rawValue)), value=\(String(describing: item.value))")
-            let stringVal = (item.value(forKey: "stringValue") as? String) ?? (item.value(forKey: "value") as? String)
+            let valueDescription: String
+            let stringVal: String?
+            if #available(iOS 16.0, *) {
+                stringVal = try? await item.load(.stringValue)
+                valueDescription = stringVal ?? "nil"
+            } else {
+                stringVal = item.stringValue ?? (item.value(forKey: "value") as? String)
+                valueDescription = stringVal ?? (item.value(forKey: "value").map { String(describing: $0) } ?? "nil")
+            }
+            print("updateMetadata: item key=\(String(describing: item.commonKey?.rawValue)), value=\(valueDescription)")
             if let key = item.commonKey?.rawValue {
                 switch key.lowercased() {
-                case "title": title = title ?? stringVal
-                case "artist": artist = artist ?? stringVal
+                case "title": if title == nil { title = stringVal }
+                case "artist": if artist == nil { artist = stringVal }
                 default: break
                 }
-            } else if let v = stringVal { if title == nil { title = v } }
+            } else if let v = stringVal {
+                if title == nil { title = v }
+            }
         }
         let combined: String? = (artist != nil && title != nil) ? "\(artist!) — \(title!)" : (title ?? artist)
-        DispatchQueue.main.async { self.trackInfo = combined }
+        self.trackInfo = combined
         if let t = title {
             print("updateMetadata: attempting iTunes artwork fetch for title='\(t)' artist='\(artist ?? "nil")'")
             fetchArtworkFromiTunes(artist: artist, title: t)
@@ -400,7 +452,7 @@ struct ContentView: View {
     // Disable the play button temporarily (on first load and when returning from ListenAgain)
     @State private var playDisabled: Bool = true
 
-    private func disablePlayTemporarily(_ seconds: TimeInterval = 3.0) {
+    private func disablePlayTemporarily(_ seconds: TimeInterval = 2.0) {
         playDisabled = true
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
             playDisabled = false
@@ -498,18 +550,12 @@ struct ContentView: View {
                     .zIndex(1000),
                 alignment: .bottom
             )
-            .fullScreenCover(isPresented: $showListenAgain) {
+            .fullScreenCover(isPresented: $showListenAgain, onDismiss: { disablePlayTemporarily() }) {
                 ListenAgainView().environmentObject(radio)
             }
         }
         .navigationBarHidden(true)
         .onAppear { disablePlayTemporarily() }
-        .onChange(of: showListenAgain) { newValue in
-            if !newValue {
-                // when returning from ListenAgain view, disable play briefly
-                disablePlayTemporarily()
-            }
-        }
     }
 
     private func openContactMail() {

@@ -27,6 +27,9 @@ struct ListenAgainView: View {
     @State private var selectedShowID: String? = nil
     // Observable image name used for the bottom artwork. Changing this forces the Image to refresh via .id
     @State private var bottomImageName: String? = nil
+    // HUD state: shows recent seeked time briefly
+    @State private var hudTime: Double? = nil
+    @State private var hudWorkItem: DispatchWorkItem? = nil
 
     // Find an asset image name for a show id (tolerant matching using contains if needed)
     private func imageNameForID(_ id: String?) -> String? {
@@ -35,6 +38,20 @@ struct ListenAgainView: View {
         if let contains = shows.first(where: { id.contains($0.id) }) { return contains.imageName }
         if let contained = shows.first(where: { $0.id.contains(id) }) { return contained.imageName }
         return nil
+    }
+
+    // Show HUD for a short duration displaying the given seconds value
+    private func showHUD(for seconds: Double) {
+        hudWorkItem?.cancel()
+        hudWorkItem = nil
+        DispatchQueue.main.async {
+            hudTime = seconds
+            let work = DispatchWorkItem {
+                DispatchQueue.main.async { hudTime = nil }
+            }
+            hudWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
+        }
     }
 
     // Local helper to open Mail app for Contact Us
@@ -136,15 +153,73 @@ struct ListenAgainView: View {
             ?? imageNameForID(radio.playingShowID)
             ?? "ListenAgainLogo"
 
-        Image(imgToShow)
-            .renderingMode(.original)
-            .resizable()
-            .scaledToFit()
-            .id(imgToShow) // force SwiftUI to replace the Image when the name changes
-            .cornerRadius(12)
-            .shadow(radius: imgToShow == "PHLogo" ? 4 : 8)
-            .padding(imgToShow == "PHLogo" ? 24 : 20)
-            .onAppear { print("bottomArtwork -> showing=\(imgToShow) selected=\(String(describing: selectedShowID)) playing=\(String(describing: radio.playingShowID)) currentStream=\(String(describing: radio.currentStreamURL))") }
+        // Determine current show by selectedShowID, playingShowID, or matching currentStreamURL
+        let currentURLStr = radio.currentStreamURL?.absoluteString
+        let show = shows.first(where: { $0.id == selectedShowID })
+            ?? shows.first(where: { $0.id == radio.playingShowID })
+            ?? shows.first(where: { $0.url.absoluteString == currentURLStr })
+        let isPlayingThisShow = radio.isPlaying && (show != nil)
+
+        ZStack(alignment: .center) {
+            Image(imgToShow)
+                .renderingMode(.original)
+                .resizable()
+                .scaledToFit()
+                .id(imgToShow)
+                .cornerRadius(12)
+                .shadow(radius: imgToShow == "PHLogo" ? 4 : 8)
+                .padding(imgToShow == "PHLogo" ? 24 : 20)
+                .onAppear { print("bottomArtwork -> showing=\(imgToShow) selected=\(String(describing: selectedShowID)) playing=\(String(describing: radio.playingShowID)) currentStream=\(String(describing: radio.currentStreamURL))") }
+
+            if isPlayingThisShow {
+                HStack(spacing: 36) {
+                    Button(action: { radio.seekBackward(15) }) {
+                        Image(systemName: "gobackward.15")
+                            .font(.title)
+                            .foregroundColor(.white)
+                            .padding(14)
+                            .background(Color.black.opacity(0.5))
+                            .clipShape(Circle())
+                    }
+                    .accessibilityLabel("Rewind 15 seconds")
+
+                    Button(action: { radio.seekForward(15) }) {
+                        Image(systemName: "goforward.15")
+                            .font(.title)
+                            .foregroundColor(.white)
+                            .padding(14)
+                            .background(Color.black.opacity(0.5))
+                            .clipShape(Circle())
+                    }
+                    .accessibilityLabel("Fast forward 15 seconds")
+                }
+                .padding()
+                .transition(.opacity)
+            }
+
+            if let t = hudTime {
+                VStack {
+                    Text(formatTime(t))
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color.black.opacity(0.75))
+                        .cornerRadius(10)
+                        .shadow(radius: 6)
+                }
+                .padding(.bottom, 40)
+                .transition(.opacity)
+            }
+        }
+    }
+
+    private func formatTime(_ seconds: Double) -> String {
+        guard seconds.isFinite else { return "-:--" }
+        let s = Int(round(seconds))
+        let m = s / 60
+        let sec = s % 60
+        return String(format: "%d:%02d", m, sec)
     }
 
     // Small subview for the top 60% list area (broken out to help the compiler)
@@ -290,6 +365,10 @@ struct ListenAgainView: View {
              }
             bottomImageName = imageNameForID(newURL?.absoluteString)
          }
+         // Show HUD when currentTime changes (seek completed)
+        .onChange(of: radio.currentTime) { _old, newTime in
+            if let t = newTime { showHUD(for: t) }
+        }
     }
 }
 
