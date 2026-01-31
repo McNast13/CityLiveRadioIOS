@@ -1,0 +1,62 @@
+name: Build and Upload to App Store Connect
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - menu
+
+jobs:
+  build-and-upload:
+    name: Build and upload .ipa
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.1'
+
+      - name: Install dependencies
+        run: |
+          gem install bundler --no-document || true
+
+      - name: Create build directories
+        run: |
+          mkdir -p build
+
+      - name: Build archive
+        env:
+          DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+        run: |
+          set -o pipefail
+          xcodebuild -project CityLiveRadio.xcodeproj -scheme CityLiveRadio -configuration Release \
+            -archivePath build/CityLiveRadio.xcarchive archive | xcpretty || true
+
+      - name: Export IPA
+        run: |
+          set -o pipefail
+          xcodebuild -exportArchive -archivePath build/CityLiveRadio.xcarchive \
+            -exportOptionsPlist exportOptions.plist -exportPath build/export | xcpretty || true
+
+      - name: List exported files
+        run: ls -la build/export || true
+
+      - name: Upload to App Store Connect (altool)
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APP_SPECIFIC_PASSWORD: ${{ secrets.APP_SPECIFIC_PASSWORD }}
+        run: |
+          IPA=$(ls build/export/*.ipa | head -n 1)
+          if [ -z "$IPA" ]; then echo "No IPA found in build/export"; exit 1; fi
+          echo "Uploading $IPA to App Store Connect..."
+          xcrun altool --upload-app -f "$IPA" -u "$APPLE_ID" -p "$APP_SPECIFIC_PASSWORD" --verbose
+
+      - name: Upload artifact (IPA)
+        uses: actions/upload-artifact@v4
+        with:
+          name: CityLiveRadio-ipa
+          path: build/export/*.ipa
