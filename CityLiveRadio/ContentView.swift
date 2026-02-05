@@ -10,23 +10,139 @@ import Combine
 #if canImport(UIKit)
 import UIKit
 #endif
+import MediaPlayer
 
 // `PlayerProtocol` is defined in PlayerProtocol.swift
 
 final class RadioPlayer: NSObject, ObservableObject {
-    @Published var isPlaying: Bool = false
-    @Published var trackInfo: String? = nil
-    @Published var currentStreamURL: URL? = nil
+    @Published var isPlaying: Bool = false {
+        didSet {
+            DispatchQueue.main.async { self.updateNowPlayingInfo() }
+        }
+    }
+    @Published var trackInfo: String? = nil {
+        didSet {
+            DispatchQueue.main.async { self.updateNowPlayingInfo() }
+        }
+    }
+    @Published var currentStreamURL: URL? = nil {
+        didSet {
+            DispatchQueue.main.async { self.updateNowPlayingInfo() }
+        }
+    }
     // id (url.absoluteString) of the show that's currently playing (if any)
-    @Published var playingShowID: String? = nil
-    @Published var artwork: UIImage? = nil
+    @Published var playingShowID: String? = nil {
+        didSet {
+            DispatchQueue.main.async { self.updateNowPlayingInfo() }
+        }
+    }
+    @Published var artwork: UIImage? = nil {
+        didSet {
+            DispatchQueue.main.async { self.updateNowPlayingInfo() }
+        }
+    }
     // Current playback time (seconds) - updated after seeks complete
-    @Published var currentTime: Double? = nil
+    @Published var currentTime: Double? = nil {
+        didSet {
+            DispatchQueue.main.async { self.updateNowPlayingInfo() }
+        }
+    }
 
     private var player: AVPlayer?
     private var metadataOutput: AVPlayerItemMetadataOutput?
     private var testPlayer: PlayerProtocol? = nil
     private let liveStreamURL = URL(string: "https://streaming.live365.com/a91939")!
+    // keep track of registered remote command handlers if needed (closures)
+    private var remoteCommandTargetsRegistered = false
+
+    // MARK: - Now Playing integration
+    private func registerRemoteCommands() {
+        guard !remoteCommandTargetsRegistered else { return }
+        remoteCommandTargetsRegistered = true
+        let center = MPRemoteCommandCenter.shared()
+
+        center.playCommand.isEnabled = true
+        center.playCommand.addTarget { [weak self] _ in
+            guard let self = self else { return .commandFailed }
+            self.play()
+            return .success
+        }
+
+        center.pauseCommand.isEnabled = true
+        center.pauseCommand.addTarget { [weak self] _ in
+            guard let self = self else { return .commandFailed }
+            self.pause()
+            return .success
+        }
+
+        center.togglePlayPauseCommand.isEnabled = true
+        center.togglePlayPauseCommand.addTarget { [weak self] _ in
+            guard let self = self else { return .commandFailed }
+            self.toggle()
+            return .success
+        }
+    }
+
+    private func updateNowPlayingInfo() {
+        var nowInfo = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [String: Any]()
+
+        // title / artist from trackInfo (if available)
+        if let track = trackInfo {
+            // keep the label as-is (you can parse artist/title if needed)
+            nowInfo[MPMediaItemPropertyTitle] = track
+        } else if let url = currentStreamURL {
+            nowInfo[MPMediaItemPropertyTitle] = url.lastPathComponent
+        }
+
+        // artwork
+        if let img = artwork {
+            let artworkObj = MPMediaItemArtwork(boundsSize: img.size) { _ in img }
+            nowInfo[MPMediaItemPropertyArtwork] = artworkObj
+        }
+
+        // playback rate and elapsed
+        nowInfo[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
+        if let player = player {
+            let elapsed = CMTimeGetSeconds(player.currentTime())
+            if elapsed.isFinite { nowInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed }
+
+            // Use the modern async API on iOS 16+ to load the asset duration.
+            // We update the Now Playing center immediately with elapsed, and then
+            // asynchronously add the duration when available so the system UI (Dynamic Island)
+            // can show more complete playback info.
+            if #available(iOS 16.0, *) {
+                if let asset = player.currentItem?.asset {
+                    Task { @MainActor in
+                        do {
+                            let durationTime = try await asset.load(.duration)
+                            let dur = CMTimeGetSeconds(durationTime)
+                            if dur.isFinite && dur > 0 {
+                                // update only the duration field without clobbering other keys
+                                var updated = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? nowInfo
+                                updated[MPMediaItemPropertyPlaybackDuration] = dur
+                                MPNowPlayingInfoCenter.default().nowPlayingInfo = updated
+                            }
+                        } catch {
+                            // ignore duration load errors — duration will simply be omitted
+                            print("updateNowPlayingInfo: failed to load duration: \(error)")
+                        }
+                    }
+                }
+            } else {
+                // Fallback for older iOS versions: synchronous duration access
+                if let duration = player.currentItem?.asset.duration {
+                    let dur = CMTimeGetSeconds(duration)
+                    if dur.isFinite && dur > 0 { nowInfo[MPMediaItemPropertyPlaybackDuration] = dur }
+                }
+            }
+        } else if let t = currentTime { nowInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = t }
+
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nowInfo
+    }
+
+    private func clearNowPlayingInfo() {
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+    }
 
     convenience init(player: PlayerProtocol) {
         self.init()
@@ -111,6 +227,7 @@ final class RadioPlayer: NSObject, ObservableObject {
                 self.trackInfo = nil
                 self.artwork = nil
                 self.playingShowID = nil
+                self.clearNowPlayingInfo()
             }
             return
         }
@@ -121,6 +238,7 @@ final class RadioPlayer: NSObject, ObservableObject {
             self.trackInfo = nil
             self.artwork = nil
             self.playingShowID = nil
+            self.clearNowPlayingInfo()
         }
         print("RadioPlayer.stop(): player paused and cleared; isPlaying will be false; currentStreamURL cleared")
     }
@@ -446,6 +564,15 @@ extension RadioPlayer: AVPlayerItemMetadataOutputPushDelegate {
     }
 }
 
+// Update Now Playing when relevant properties change
+extension RadioPlayer {
+    // call this once in init or when the audio session is ready
+    func configureNowPlaying() {
+        registerRemoteCommands()
+        updateNowPlayingInfo()
+    }
+}
+
 struct ContentView: View {
     @StateObject private var radio = RadioPlayer()
     @State private var showListenAgain: Bool = false
@@ -555,7 +682,10 @@ struct ContentView: View {
             }
         }
         .navigationBarHidden(true)
-        .onAppear { disablePlayTemporarily() }
+        .onAppear {
+            radio.configureNowPlaying()
+            disablePlayTemporarily()
+        }
     }
 
     private func openContactMail() {
